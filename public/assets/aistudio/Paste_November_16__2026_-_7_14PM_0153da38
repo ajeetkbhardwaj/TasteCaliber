@@ -1,0 +1,879 @@
+# Taste
+
+Taste is powered by our meta neuro-symbolic AI model `taste-1` with continuous reinforcement learning (RL). We combine reasoning with neural intuition to create an invisible architecture of your choices, structures, patterns and tooling preferences.
+
+![meta neuro-symbolic ai model taste-1](/docs/mns.png)
+
+- **Continuously learning** side learns the texture of your code (explicit & implicit feedback).
+- **Meta Neuro-Symbolic AI model `taste-1`** enforces the invisible logic of your choices.
+- **Reflective Context Engineering** of a self-aware RL feedback loop to build skills.
+
+✓ 10x faster coding, 2x faster code reviews, 5x fewer bugs.
+
+---
+
+## Taste: the next frontier in AI coding
+
+---
+
+## `taste-1`
+
+The `taste-1` model is the core of taste. To build your profile it does three things.
+
+- Learns from you. Every accept, reject, and edit becomes a signal.
+- Thinks like you. It picks up patterns and micro-decisions you would never write down.
+- Grows with you. The learning loop keeps running, so the profile does not go stale.
+
+Most coding assistants fall back on generic best practices. Taste builds a model of how your team reviews code, what style you hold to, and which architectural choices you make. It observes how you write, review, and merge, and turns that into a prior of your choices, your coding taste.
+
+---
+
+## Why do I still need LLMs with the taste model?
+
+`taste-1` is not an LLM. It does not generate text and it does not answer prompts. It is a meta neuro-symbolic model that classifies taste learnings. Give it a signal, such as an accept, a reject, an edit, or a correction diff, and it decides whether that signal is a real preference, which category it belongs to (`cli`, `typescript`, `architecture` and so on), and how confident the learning is.
+
+So its output has the shape of a classifier. It decides, it does not write. What produces that decision is not a simple classifier. It is a meta neuro-symbolic architecture, and that architecture does things a large language model cannot.
+
+### What meta neuro-symbolic means here
+
+`taste-1` has a strong neuro-symbolic architecture. Two halves check each other, and a loop on top learns how to weigh them.
+
+- **Neural.** The learned half of the architecture reads the signals an LLM has extracted and forms an intuition about what you prefer. This is the half that picks up the patterns you would never write down, like where you split a function, which abstractions you reach for, and what you reject on sight.
+- **Symbolic.** A rule layer holds the structure of a taste profile. It knows the categories a learning can belong to, how to score confidence, how learnings relate to each other, and what counts as a contradiction. When a new preference conflicts with an established one, this layer flags the conflict instead of letting the new one overwrite the old.
+- **Meta.** The continuous learning loop. Every accept, reject and edit is feedback on earlier decisions, so `taste-1` re-scores old learnings as well as classifying new ones. Confidence rises when a preference keeps showing up and falls when you contradict it. As the profile grows, the loop reorganizes learnings into categories.
+
+Neural for intuition. Symbolic for consistency. Meta for correction over time. None of the three generates text.
+
+Do the same job with an LLM and it costs about 100x more, runs about 8x slower, and hallucinates preferences. That is why the neuro-symbolic architecture wins here.
+
+### Why not let an LLM decide?
+
+Many tools ask an LLM to read your diffs and write down your preferences. An LLM is trained to produce text a person will like, not a decision software can act on. Four things go wrong.
+
+**It fills gaps.** Ask an LLM "what does this developer prefer?" and it answers whether or not the diffs support an answer. Where the evidence is thin it reaches for what developers usually prefer. In a taste profile that is a bug, because a made-up preference gets enforced on every later turn.
+
+**It does not hold still.** Ask the same LLM twice and you get two different profiles. TypeSafe ran a 14-question rubric over one insurance claim 15 times and found the LLM answers moved from run to run, at temperature 0 too, with the models disagreeing with themselves on the judgment calls. Taste is nothing but judgment calls. A profile that changes on every run is not your profile.
+
+**Its confidence is a number it wrote.** Ask an LLM for a confidence score and it gives you one, in the style of a probability. Nothing trained it to make that number match how often it is right. Models trained with human feedback are overconfident by construction, because raters reward sounding sure.
+
+**It starts over.** An LLM has no memory of its earlier decisions. Each pass starts blank, so it re-learns what it already recorded and cannot tell a new contradiction from an old one.
+
+`taste-1` is built the other way around. It reads natural language like an LLM does, but returns decisions and probabilities rather than text.
+
+| An LLM judging taste | `taste-1` |
+| --- | --- |
+| Invents a preference when the evidence is thin | Returns low confidence or no learning. Its answers are drawn from a fixed set, so it cannot write a preference that is not in the input |
+| Different answer on every run | Same input, same decision. It evaluates, it does not sample |
+| Confidence is a number it wrote | Confidence is a calibrated score. Higher confidence means the learning is right more often, and the meta loop adjusts it against later evidence |
+| Can invent new categories on the fly | The symbolic layer fixes the set of categories it can pick from |
+| Starts fresh each pass | Carries prior decisions forward and re-scores them |
+
+Can `taste-1` still be wrong? Yes. The difference is that its confidence is calibrated. Taste enforces a high-confidence learning, keeps a low-confidence one as a hint, and flags a conflicting signal instead of applying it. None of that works when the confidence number was made up.
+
+That is the point of putting a decision model in the middle. The LLMs handle the words. Neither decides what you prefer.
+
+The full pipeline has four steps, and LLMs sit at two of them:
+
+```
+                 ┌──────────────────────────────────────────┐
+                 │  You, coding in Command Code             │
+                 │  prompts · accepts · rejects · edits     │
+                 │  correction diffs from your commits      │
+                 └────────────────────┬─────────────────────┘
+                                      │  raw, unstructured
+                                      ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │  1. INPUT  ·  LLM (yours to pick)                           │
+   │     reads the text and diffs                                │
+   │     turns them into structured signals                      │
+   │     "this edit changed X into Y because …"                  │
+   └────────────────────┬────────────────────────────────────────┘
+                        │  structured signals
+                        ▼
+   ╔═════════════════════════════════════════════════════════════╗
+   ║  2. LEARN  ·  taste-1  (meta neuro-symbolic, not an LLM)    ║
+   ║     classifies each signal:                                 ║
+   ║       real preference or noise?                             ║
+   ║       which category? (cli · typescript · architecture …)   ║
+   ║       how confident? (0 → 1)                                ║
+   ║     generates no text                                       ║
+   ╚════════════════════╤════════════════════════════════════════╝
+                        │  typed learnings + confidence
+                        ▼
+   ┌─────────────────────────────────────────────────────────────┐
+   │  3. OUTPUT  ·  LLM (yours to pick)                          │
+   │     writes the learnings as readable markdown               │
+   │     merges them with what is already known                  │
+   └────────────────────┬────────────────────────────────────────┘
+                        │  markdown
+                        ▼
+                 ┌──────────────────────────────────────────┐
+                 │  4. STORE  ·  the CLI                    │
+                 │  .commandcode/taste/**/taste.md          │
+                 │  read back into every later turn         │
+                 └──────────────────────────────────────────┘
+
+   LLM steps    swap them in /config, Feature models
+   taste-1      the decision step. Not a text model, not swappable
+```
+
+| Step | Who does it | What it does |
+| --- | --- | --- |
+| 1. Input | An LLM of your choice | Reads your prompts, edits and correction diffs and turns them into structured signals |
+| 2. Learning | `taste-1` | Classifies the symbolic space of the signals into taste learnings with a category and a confidence |
+| 3. Output | An LLM of your choice | Writes the learnings as readable, editable markdown |
+| 4. Storage | The CLI | Saves the result to `taste.md` in your project, global, or remote packages |
+
+### The LLM steps are yours to configure
+
+Steps 1 and 3 are ordinary text work, so you get to pick which model does them. Open `/config`, go to **Feature models**, and set the model for each row.
+
+| Row | What it controls | Config key |
+| --- | --- | --- |
+| **Taste learning** | The model that handles the input and output of `taste-1` during a session. Defaults to the model you are coding with | `featureModels.tasteLearning` |
+| **`/learn-taste`** | The model used when you bootstrap taste from existing repositories or from sessions in other coding agents | `featureModels.tasteOnboarding` |
+
+Both keys live in `~/.commandcode/config.json` and are documented on the [settings](/settings#config-json-personal-preferences) page. Bring your own key with a [BYOK provider](/byok) and the LLM steps run on that provider too.
+
+Inspect the traffic and you will see LLM calls on the model you picked. Those are steps 1 and 3. The [Usage](/studio#usage) page in Studio lists them under the `taste-1` label. `taste-1` itself is the step in the middle, and it is not a text model, so there is nothing to swap it for.
+
+### What taste costs
+
+`taste-1` is on introductory pricing. Every plan includes it at no extra charge, with generous limits. It is not free for us to run. Command Code absorbs that cost for now. Disable taste learning and nothing runs.
+
+The only cost you pay for taste is the LLM work at steps 1 and 3, the model that turns your input into signals and the model that writes the learnings out as text. Those calls bill like any other request on the model you picked in Feature models, or on your own provider if you use BYOK.
+
+| Part | Cost |
+| --- | --- |
+| `taste-1` (step 2, the meta neuro-symbolic model) | Included in every plan at no extra charge, within generous limits (introductory pricing) |
+| LLM input processing (step 1) | Normal usage on the model you chose |
+| LLM output processing (step 3) | Normal usage on the model you chose |
+| Storage (step 4) | Local files, nothing to bill |
+
+A decision model does not pay for generating tokens one at a time. `taste-1` does a fixed amount of work per signal, so it stays cheap to serve. That is the same property that makes it not an LLM.
+
+### Other models of this kind
+
+Decision models that give up text generation are their own class, and `taste-1` is not the only one. TypeSafe AI's [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev), the first of what they call System One Models, is the clearest public example. Their docs draw the line cleanly. An LLM produces words for people. A System One model produces typed decisions for software. Send Jev a state and a set of typed questions and you get back a chosen option, a probability for each option, and a confidence. It never generates a string, so it never has a type error and never hallucinates a reply.
+
+Jev beats frontier LLMs on their decision benchmarks by two orders of magnitude on cost and speed. TypeSafe still calls it the wrong tool for chat, code generation, or written explanations. Anyone building on Jev pairs it with an LLM wherever prose or code has to come out.
+
+Taste uses the same split. LLMs handle the text at both ends and `taste-1` handles the decision in the middle. LLM calls in the traffic are the design, not a contradiction of it.
+
+Taste is plain markdown on purpose. You can read it, edit it, lint it with `npx taste lint`, and share it with `npx taste push`. See [Taste packages](#taste-packages).
+
+---
+
+## How to get started
+
+You can install Command Code by following these steps:
+
+**Step 1: Install Command Code**
+
+<CodeGroup title="">
+```bash {{ title: 'macOS' }}
+npm i -g command-code
+```
+```bash {{ title: 'Windows' }}
+npm i -g command-code
+```
+
+**Step 2: Login to Command Code**
+
+```bash
+cmd login
+```
+
+**Step 3: Start coding with Command Code**
+
+```bash
+cmd
+```
+
+Once installed, just start coding. Taste learning runs in the background and builds your profile from every interaction.
+
+### Taste sharing and portability
+
+Taste is built to move. Your learned preferences are not locked to one project. You can use them across all your projects, share them with your team, and combine profiles to match how you work. The [Command Code Studio](/studio) shows and manages all of it.
+
+---
+
+## Settings
+
+Taste learning runs in the background and learns from your interactions. You can turn it on or off per project or for your user account, from the `/taste` panel inside Command Code.
+
+### Changing settings from `/taste`
+
+Run `/taste` to open the **Taste Settings** panel. It has two rows.
+
+- **This project** writes `.commandcode/settings.json`, which is committed and shared with your team.
+- **User** writes `~/.commandcode/config.json`, which applies to all your projects.
+
+### Where taste is set
+
+Command Code checks these files in priority order to decide whether taste learning is on.
+
+| Priority | Set in | Affects | Shared with team? |
+| --- | --- | --- | --- |
+| 1 | `.commandcode/settings.local.json` | local setup only | No, personal, not committed |
+| 2 | `.commandcode/settings.json` | this project | Yes, committed |
+| 3 | `~/.commandcode/config.json` (User row) | all your projects | - |
+| 4 | *(unset)* | - | on by default |
+
+The quickest way to turn taste learning on or off is the CLI.
+
+```bash
+cmd taste disable         # off for the current project (default)
+cmd taste enable          # back on for the current project
+cmd taste disable --user  # off at the user level (all your projects)
+```
+
+Enable and disable target the current project by default. A project setting takes precedence over your user setting, so this is what turns it off where you are working. Pass `--user` to change the user-level default for all your projects.
+
+You can also flip it with `/taste` inside a session, or set it by hand. To disable taste learning for a project, add this to `.commandcode/settings.local.json`.
+
+```json
+{
+  "tasteLearning": false
+}
+```
+
+The override in `.commandcode/settings.local.json` takes precedence over the project-level setting.
+
+---
+
+## Manage taste
+
+Taste profiles push and pull like Git repos. The `npx taste` CLI pulls, pushes, lists, and combines taste packages, and the [Command Code Studio](/studio#taste-studio) shows them.
+
+With it you push your learned preferences to the Studio, pull taste from teammates or the community, and combine profiles to match how you work.
+
+<Steps>
+  <StepItem title="Push taste to studio">
+  You can push your taste to the Command Code Studio and share it with your team.
+    <CodeGroup title="Push taste to studio">
+    ```bash
+    npx taste push --all
+    ```
+    
+  
+
+  <StepItem title="Pull taste from studio">
+  You can pull a taste profile from the Command Code Studio to your different projects.
+    <CodeGroup title="Pull taste from studio">
+    ```bash
+    npx taste pull
+    ```
+    
+  
+
+  <StepItem title="List all taste profiles">
+  You can list all the taste profiles available in the Command Code Studio.
+    <CodeGroup title="List all taste profiles">
+    ```bash
+    npx taste list
+    ```
+    
+  
+
+  <StepItem title="Open a specific taste profile">
+  You can open a specific taste profile in Command Code Studio.
+    <CodeGroup title="Open a specific taste profile">
+    ```bash
+    npx taste open <package>
+    ```
+    
+  
+
+The first command pushes your whole project's taste to `commandcode.ai/username/taste`. The second pulls taste from remote into your local project.
+
+```
+npx taste push --all
+```
+
+```
+npx taste pull username/project-name
+```
+
+---
+
+## Taste packages
+
+A taste package is a set of learnings organized by category, such as `cli`, `typescript` or `architecture`. Each package holds a `taste.md` file with the preferences and patterns Command Code has learned.
+
+There are three kinds of package.
+
+### Project
+
+Command Code learns project packages on its own and stores them in your project.
+
+- **Path**: `.commandcode/taste/`
+- **Use case**: Learnings unique to this codebase
+
+### Global
+
+Your personal packages, available to every project on your machine. Use the `-g` flag to push or pull them.
+
+- **Path**: `~/.commandcode/taste/`
+- **Use case**: Your personal taste that follows you across projects
+
+### Remote
+
+Packages stored under your profile at [commandcode.ai](https://commandcode.ai).
+
+- **Path**: `commandcode.ai/username/taste`
+- **Use case**: Team sharing, backup, sync across machines, public packages
+
+By default `npx taste push` and `npx taste pull` work on your remote packages.
+
+### File structure
+
+Project and global packages are laid out like this.
+
+```
+your-project/
+└── .commandcode/
+    └── taste/
+        ├── taste.md           # Main taste file
+        ├── cli/
+        │   └── taste.md       # CLI-specific learnings
+        ├── typescript/
+        │   └── taste.md       # TypeScript preferences
+        └── architecture/
+            └── taste.md       # Architecture patterns
+```
+
+```
+~/.commandcode/
+└── taste/
+    ├── cli/
+    │   └── taste.md
+    ├── react/
+    │   └── taste.md
+    └── testing/
+        └── taste.md
+```
+
+---
+
+## Project taste vs. individual packages
+
+You can push or pull your whole project taste, or one package at a time.
+
+### Project taste (`push --all`)
+
+With `push --all`, Command Code pushes your whole project's taste as one unit.
+
+```bash
+npx taste push --all
+```
+
+- Bundles every package in your project together
+- Takes the project name from your current directory
+- Pushes to remote under your namespace
+
+### Individual package (`push <package>`)
+
+When you name a package, only that package uploads.
+
+```bash
+npx taste push cli
+npx taste push myorg/cli
+```
+
+- Pushes one package at a time
+- You choose the namespace, personal or organization
+- Use it to share one set of learnings without the rest
+
+---
+
+## Command reference
+
+Reference for every `npx taste` command, across project, global, and remote packages.
+
+| Command | Description |
+| ------- | ----------- |
+| [`npx taste enable`](#taste-enable--disable) | Turn taste learning on (save preferences across sessions) |
+| [`npx taste disable`](#taste-enable--disable) | Turn taste learning off (stop saving preferences) |
+| [`npx taste push`](#taste-push) | Push project or individual packages to remote or global |
+| [`npx taste pull`](#taste-pull) | Pull packages from remote or global |
+| [`npx taste list`](#taste-list) | List all available packages |
+| [`npx taste lint`](#taste-lint) | Validate package format and structure |
+| [`npx taste open`](#taste-open) | Open packages in your default editor |
+
+`npx taste` and `cmd taste` are the same command. `cmd taste` needs a global install (`npm i -g command-code`), so we recommend `npx taste`.
+
+### taste enable / disable
+
+Turn taste learning on or off without opening a session. Both write the same setting the `/taste` overlay and the live learner read, so the change takes effect on your next turn.
+
+```bash
+npx taste enable    # on for the current project (default)
+npx taste disable   # off for the current project
+```
+
+**Options**
+
+| Option | Description |
+| ------ | ----------- |
+| `-u, --user` | Apply at the user level (all your projects) instead of the current project |
+
+By default the change targets the current project. A project setting takes precedence over your user setting, so this is what turns taste learning on or off where you are working. Pass `--user` to change the user-level default for all your projects. When taste learning is off, preferences you state stay in the current session and are not saved.
+
+### taste push
+
+Push taste packages from your local project to remote or global.
+
+```bash
+npx taste push [package] [options]
+```
+
+**Options**
+
+| Option | Short | Description |
+| ------ | ----- | ----------- |
+| `--all` | | Push entire project taste (all packages bundled together) |
+| `--global` | `-g` | Push to global (`~/.commandcode/taste`) |
+| `--overwrite` | | Replace the target without merging |
+| `--public` | | Make package publicly discoverable (remote only) |
+
+**Targets**
+
+Remote is the default. It pushes under your profile at `commandcode.ai/username/taste`, for team sharing, backup, syncing across machines, and public packages. Use `-g` to push to your global packages at `~/.commandcode/taste/` instead, for personal taste that follows you across projects.
+
+```bash
+# Push project taste
+npx taste push --all
+
+# Push individual package
+npx taste push cli
+npx taste push myorg/cli
+```
+
+```bash
+npx taste push cli -g
+```
+
+**Examples**
+
+```bash
+npx taste push --all
+```
+
+Bundles all your project's taste packages and uploads them to `commandcode.ai/username/taste`. Your team can then pull with `npx taste pull username/project-name`.
+
+```bash
+npx taste push cli
+```
+
+Asks you to pick a namespace, personal or organization, then uploads only the `cli` package. If you have push access to several accounts, it asks which one.
+
+```bash
+npx taste push myteam/cli
+```
+
+Uploads the `cli` package directly to the `myteam` namespace without prompting.
+
+```bash
+npx taste push cli --public
+```
+
+Uploads the package and makes it publicly discoverable by other Command Code users.
+
+```bash
+npx taste push cli --overwrite
+```
+
+Replaces the remote package without merging. By default, push intelligently merges learnings.
+
+**Merge behavior**
+
+By default, `taste push` intelligently merges your local learnings into the existing remote or global content.
+
+- New learnings are added
+- Learnings whose confidence changed are updated
+- Identical learnings stay as they are
+
+Use `--overwrite` to skip the merge and replace the target.
+
+**Output**
+
+```sh
+✓ Pushed project taste to commandcode.ai/aa/taste (3 packages, 15 learnings)
+```
+
+```sh
+✓ Pushed 'cli' to commandcode.ai/aa/taste (2 learnings added, 1 updated, 3 unchanged)
+```
+
+### taste pull
+
+Pull taste packages from remote or global to your project.
+
+```bash
+npx taste pull <namespace>/<package> [options]
+```
+
+**Options**
+
+| Option | Short | Description |
+| ------ | ----- | ----------- |
+| `--global` | `-g` | Pull from global (`~/.commandcode/taste`) |
+| `--all` | | Pull all packages (global only) |
+| `--overwrite` | | Replace the local package without merging |
+
+**Targets**
+
+Remote is the default. It pulls from your profile or someone else's at `commandcode.ai/username/taste`, for taste from teammates, syncing across machines, and public packages. Use `-g` to pull from your global packages at `~/.commandcode/taste/` instead.
+
+```bash
+# Pull project taste
+npx taste pull ahmadawais/my-project
+
+# Pull individual package
+npx taste pull ahmadawais/cli
+```
+
+```bash
+# Pull specific package
+npx taste pull cli -g
+
+# Pull all global packages
+npx taste pull --all -g
+```
+
+**Examples**
+
+```bash
+npx taste pull teammate/awesome-project
+```
+
+Downloads all taste packages from `teammate/awesome-project` to your local project.
+
+```bash
+npx taste pull ahmadawais/cli
+```
+
+Downloads only the `cli` package from `ahmadawais`'s profile.
+
+```bash
+npx taste pull cli -g
+```
+
+Copies the `cli` package from `~/.commandcode/taste/` to your current project.
+
+```bash
+npx taste pull --all -g
+```
+
+Copies all packages from your global to the current project.
+
+```bash
+npx taste pull ahmadawais/cli --overwrite
+```
+
+Replaces your local `cli` package with the remote version.
+
+**Merge behavior**
+
+By default, `taste pull` intelligently merges remote learnings into your local content.
+
+- New learnings from remote are added locally
+- Learnings whose confidence changed are updated
+- Identical learnings stay as they are
+
+Use `--overwrite` to skip the merge and replace the local content.
+
+**Output**
+
+```sh
+✓ Pulled 'cli' from saqib (1 learning added, 2 unchanged)
+Saved to: .commandcode/taste/cli/taste.md
+```
+
+### taste list
+
+List all available taste packages.
+
+```bash
+npx taste list [options]
+```
+
+**Options**
+
+| Option | Short | Description |
+| ------ | ----- | ----------- |
+| `--global` | `-g` | List packages from global (`~/.commandcode/taste`) |
+| `--remote` | | List packages from your remote profile at commandcode.ai |
+
+**Scopes**
+
+By default, `taste list` shows the packages in your project's `.commandcode/taste/` directory. Use `-g` to list your global packages at `~/.commandcode/taste/`, or `--remote` to list the packages under your profile at `commandcode.ai/username/taste`.
+
+```bash
+npx taste list
+```
+
+```bash
+npx taste list -g
+```
+
+```bash
+npx taste list --remote
+```
+
+**Output**
+
+Each row shows the package name, a `[public]` badge for packages others can find, star and download counts for public packages, the number of learnings, and when the package last changed.
+
+```sh
+Taste Packages
+Stored locally in .commandcode/taste
+
+  cli                    (8 learnings, updated 2 hours ago)
+  typescript             (5 learnings, updated 1 day ago)
+  architecture           (12 learnings, updated just now)
+
+Total: 3 packages, 25 learnings
+```
+
+```sh
+Taste Packages
+Stored on commandcode.ai/aa/taste
+
+  my-project             (15 learnings, updated 1 hour ago)
+  cli [public] ★5 ↓12    (8 learnings, updated 2 days ago)
+
+Total: 2 packages, 23 learnings
+```
+
+### taste lint
+
+Validate taste file format and structure. Run it before pushing to catch errors and warnings.
+
+```bash
+npx taste lint <package>
+```
+
+**Arguments**
+
+| Argument | Description |
+| -------- | ----------- |
+| `[package]` | Package name to lint. Optional if using `--all`. |
+
+**Options**
+
+| Option | Short | Description |
+| ------ | ----- | ----------- |
+| `--global` | `-g` | Lint packages from global (`~/.commandcode/taste`) |
+| `--all` | | Lint all packages |
+
+**Examples**
+
+```bash
+npx taste lint cli
+```
+
+Validates the `cli` taste package in your local project.
+
+```bash
+npx taste lint --all
+```
+
+Validates all taste packages in your local project's `.commandcode/taste` directory.
+
+```bash
+npx taste lint cli -g
+```
+
+Validates the `cli` package from your global.
+
+```bash
+npx taste lint --all -g
+```
+
+Validates all packages in your global at `~/.commandcode/taste`.
+
+**Output**
+
+The output looks like this.
+
+```sh
+taste.md
+✓ File is valid
+
+cli/taste.md
+✓ File is valid
+
+Summary: 0 errors, 0 warnings across 2 files
+✓ All 2 taste files are valid
+```
+
+```sh
+cli/taste.md
+✗ 2 errors found
+
+  Line 5: Invalid confidence value (must be between 0 and 1)
+  Line 12: Missing required header
+
+Summary: 2 errors, 0 warnings across 1 file
+✗ Validation failed
+```
+
+**What gets validated**
+
+| Check | Description |
+| ----- | ----------- |
+| Markdown structure | Proper header hierarchy and formatting |
+| Required fields | Presence of required metadata and sections |
+| Confidence values | Values must be between 0 and 1 |
+| Header format | Correct header syntax and naming |
+| File encoding | Valid UTF-8 encoding |
+
+**Behavior**
+
+- Validates the main `taste.md` and every category file
+- Migrates headers in legacy-format files on its own
+- Errors must be fixed before pushing
+- Warnings point at possible problems but do not block anything
+
+### taste open
+
+Open a taste package in your default editor.
+
+```bash
+npx taste open <package>
+```
+
+**Arguments**
+
+| Argument | Description |
+| -------- | ----------- |
+| `<package>` | **Required.** The name of the package to open. |
+
+**Options**
+
+| Option | Short | Description |
+| ------ | ----- | ----------- |
+| `--global` | `-g` | Open package from global (`~/.commandcode/taste`) |
+
+**Examples**
+
+```bash
+npx taste open cli
+```
+
+Opens the `cli` taste package from your local project in your default editor.
+
+```bash
+npx taste open cli -g
+```
+
+Opens the `cli` package from your global at `~/.commandcode/taste`.
+
+**Output**
+
+```sh
+✓ Opened 'cli' taste package from project
+```
+
+**Editor configuration**
+
+The command uses your system's default editor set via the `$EDITOR` environment variable. If not configured, you'll see setup instructions:
+
+```bash
+# VS Code
+echo 'export EDITOR="code"' >> ~/.zshrc
+
+# Vim
+echo 'export EDITOR="vim"' >> ~/.zshrc
+
+# Nano
+echo 'export EDITOR="nano"' >> ~/.zshrc
+
+# Sublime Text
+echo 'export EDITOR="subl"' >> ~/.zshrc
+```
+
+After adding the export, restart your terminal or run `source ~/.zshrc`.
+
+**Behavior**
+
+- Opens the taste file in your default editor
+- For category-specific files: Opens at line 1
+- For main `taste.md` files: Searches for the category heading and opens at that line
+- Automatically navigates to the correct location in the file
+
+After editing a taste file, use `npx taste lint` to validate your changes before pushing.
+
+---
+
+## Common workflows
+
+### Share your project taste with the team
+
+  <StepItem title="Push your project taste">
+    Push all your project's learnings to remote.
+    <CodeGroup title="Push project">
+    ```bash
+    npx taste push --all
+    ```
+    
+  
+
+  <StepItem title="Team members pull">
+    Others can pull the project taste to their local setup.
+    <CodeGroup title="Pull from remote">
+    ```bash
+    npx taste pull username/project-name
+    ```
+    
+  
+
+### Use your taste across projects (via global)
+
+  <StepItem title="Push to global">
+    Save a package to your global for use in any project.
+    <CodeGroup title="Push to global">
+    ```bash
+    npx taste push cli -g
+    ```
+    
+  
+
+  <StepItem title="Pull in another project">
+    In a different project, pull from global.
+    <CodeGroup title="Pull from global">
+    ```bash
+    npx taste pull cli -g
+    ```
+    
+  
+
+### Backup and sync via remote
+
+  <StepItem title="Push to your profile">
+    Back up your taste to commandcode.ai.
+    <CodeGroup title="Push to remote">
+    ```bash
+    npx taste push --all
+    ```
+    
+  
+
+  <StepItem title="Access from anywhere">
+    Pull your taste on any machine.
+    <CodeGroup title="Pull from remote">
+    ```bash
+    npx taste pull username/project-name
+    ```
+    
+  
+
+---
+
+## Next steps
+
+- Build something cool with Command Code and see your taste in action
+- View and manage your packages in the [Command Code Studio](/studio#taste-studio)
+- Join our [Discord community](https://commandcode.ai/discord) for feedback, requests, and support.

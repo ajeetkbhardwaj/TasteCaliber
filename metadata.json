@@ -1,0 +1,6 @@
+{
+  "name": "Taste MCP",
+  "description": "Neuro-symbolic coding preference MCP server with local SQLite storage, configurable local/NVIDIA/OpenRouter LLMs, and continuous RL calibration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
