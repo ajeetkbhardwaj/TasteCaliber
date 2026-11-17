@@ -42,7 +42,7 @@ export function ProfileView({
   onRefresh,
 }: ProfileViewProps) {
   const [scopeFilter, setScopeFilter] = useState<'all' | TasteScope>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'enforced' | 'hint' | 'conflicted'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'enforced' | 'hint' | 'conflicted' | 'archived'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -63,7 +63,7 @@ export function ProfileView({
   const [bootstrapNotice, setBootstrapNotice] = useState<string | null>(null);
 
   const filtered = learnings.filter((l) => {
-    if (l.status === 'archived') return false;
+    if (statusFilter === 'all' && l.status === 'archived') return false;
     if (scopeFilter !== 'all' && l.scope !== scopeFilter) return false;
     if (statusFilter !== 'all' && l.status !== statusFilter) return false;
     if (categoryFilter !== 'all' && l.category !== categoryFilter) return false;
@@ -136,6 +136,16 @@ export function ProfileView({
     }
   };
 
+  const handleRestore = async (id: string) => {
+    setBusyId(id);
+    try {
+      await fetch(`/api/learnings/${id}/restore`, { method: 'POST' });
+      await onRefresh();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleBootstrap = async (e: FormEvent) => {
     e.preventDefault();
     if (bootstrapText.trim().length < 10) {
@@ -159,8 +169,9 @@ export function ProfileView({
         setBootstrapNotice(json.error || 'Bootstrap failed.');
         return;
       }
+      const learnedCount = Array.isArray(json.learned) ? json.learned.length : Number(json.learned ?? 0);
       setBootstrapNotice(
-        `Processed ${json.processed} statement(s): ${json.learned} learned/updated, ${json.skippedNoise} noise filtered.`,
+        `Processed ${json.processedCount ?? 0} statement(s): ${learnedCount} learned/updated, ${json.skippedNoise ?? 0} noise filtered.`,
       );
       setBootstrapText('');
       await onRefresh();
@@ -206,7 +217,7 @@ export function ProfileView({
 
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg" role="group" aria-label="Status filter">
-              {(['all', 'enforced', 'hint', 'conflicted'] as const).map((st) => (
+              {(['all', 'enforced', 'hint', 'conflicted', 'archived'] as const).map((st) => (
                 <button
                   key={st}
                   type="button"
@@ -217,7 +228,7 @@ export function ProfileView({
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  {st === 'all' ? 'All Statuses' : st.charAt(0).toUpperCase() + st.slice(1)}
+                  {st === 'all' ? 'All Active' : st.charAt(0).toUpperCase() + st.slice(1)}
                 </button>
               ))}
             </div>
@@ -351,13 +362,17 @@ export function ProfileView({
                     ? 'text-emerald-700'
                     : item.status === 'conflicted'
                       ? 'text-amber-700'
-                      : 'text-slate-600';
+                      : item.status === 'archived'
+                        ? 'text-slate-400'
+                        : 'text-slate-600';
                 const statusLabel =
                   item.status === 'enforced'
                     ? 'Enforced'
                     : item.status === 'conflicted'
                       ? 'Conflict'
-                      : 'Hint';
+                      : item.status === 'archived'
+                        ? 'Archived'
+                        : 'Hint';
                 const isEditing = editingId === item.id;
 
                 return (
@@ -477,16 +492,28 @@ export function ProfileView({
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
-                          <button
-                            type="button"
-                            disabled={busyId === item.id}
-                            onClick={() => handleArchive(item.id)}
-                            aria-label={`Archive "${item.ruleText}"`}
-                            title="Archive rule"
-                            className="p-1.5 text-slate-600 bg-slate-100 border border-slate-200 rounded-md hover:bg-red-50 hover:text-red-700 hover:border-red-200 cursor-pointer disabled:opacity-50"
-                          >
-                            <Archive className="w-3.5 h-3.5" />
-                          </button>
+                          {item.status === 'archived' ? (
+                            <button
+                              type="button"
+                              disabled={busyId === item.id}
+                              onClick={() => handleRestore(item.id)}
+                              aria-label={`Restore "${item.ruleText}"`}
+                              className="px-2.5 py-1.5 text-xs font-medium text-slate-800 bg-slate-100 border border-slate-200 rounded-md hover:bg-slate-200 whitespace-nowrap cursor-pointer disabled:opacity-50"
+                            >
+                              Restore
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={busyId === item.id}
+                              onClick={() => handleArchive(item.id)}
+                              aria-label={`Archive "${item.ruleText}"`}
+                              title="Archive rule"
+                              className="p-1.5 text-slate-600 bg-slate-100 border border-slate-200 rounded-md hover:bg-red-50 hover:text-red-700 hover:border-red-200 cursor-pointer disabled:opacity-50"
+                            >
+                              <Archive className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}

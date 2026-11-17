@@ -281,6 +281,19 @@ export function SignalLabView({ onSignalProcessed }: SignalLabViewProps) {
               </div>
             )}
 
+            {trace.loopGuard?.loopDetected && (
+              <div
+                role="alert"
+                className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-900 flex items-start gap-2"
+              >
+                <AlertTriangle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold">Failure-Loop Guard Triggered</p>
+                  <p className="mt-0.5">{trace.loopGuard.interventionAdvice}</p>
+                </div>
+              </div>
+            )}
+
             {/* Step 1 */}
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">

@@ -4,6 +4,7 @@ import {
   BookOpen,
   FlaskConical,
   Cpu,
+  Gauge,
   Plug,
   Menu,
   X,
@@ -14,15 +15,17 @@ import { OverviewView } from './components/OverviewView';
 import { ProfileView } from './components/ProfileView';
 import { SignalLabView } from './components/SignalLabView';
 import { ProvidersView } from './components/ProvidersView';
+import { EconomicsView } from './components/EconomicsView';
 import { McpConnectView } from './components/McpConnectView';
 import { TasteScope } from './engine/types';
 
-type ActiveTab = 'overview' | 'profile' | 'signals' | 'providers' | 'mcp';
+type ActiveTab = 'overview' | 'profile' | 'signals' | 'economics' | 'providers' | 'mcp';
 
 const NAV_ITEMS: Array<{ id: ActiveTab; label: string; icon: typeof Layers }> = [
   { id: 'overview', label: 'Overview', icon: Layers },
   { id: 'profile', label: 'Taste Profile', icon: BookOpen },
   { id: 'signals', label: 'Signal Lab', icon: FlaskConical },
+  { id: 'economics', label: 'Economics', icon: Gauge },
   { id: 'providers', label: 'Providers', icon: Cpu },
   { id: 'mcp', label: 'MCP Connect', icon: Plug },
 ];
@@ -254,6 +257,13 @@ export default function App() {
                 />
               )}
               {activeTab === 'signals' && <SignalLabView onSignalProcessed={fetchOverview} />}
+              {activeTab === 'economics' && (
+                <EconomicsView
+                  economics={data.economics}
+                  microSkills={data.microSkills}
+                  onRefresh={fetchOverview}
+                />
+              )}
               {activeTab === 'providers' && (
                 <ProvidersView
                   providers={data.providers}

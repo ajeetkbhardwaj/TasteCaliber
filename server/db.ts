@@ -1,8 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import {
+import type {
+  EconomicsEvent,
+  EconomicsEventType,
+  EconomicsSummary,
   LintFileResult,
+  MicroSkill,
+  MicroSkillCategory,
+  MicroSkillStatus,
   ProviderConfig,
   ProviderKind,
   ProviderRole,
@@ -12,8 +18,29 @@ import {
   TastePackage,
   TasteScope,
   TasteSignalRecord,
+  ToolUsageStat,
 } from '../src/engine/types.ts';
+import { recommendUnusedTools } from '../src/engine/economics.ts';
 import { compileTasteMarkdown, lintTasteMarkdown } from '../src/engine/taste1.ts';
+
+export const ALL_MCP_TOOL_NAMES = [
+  'taste_get_context',
+  'taste_record_signal',
+  'taste_query_learnings',
+  'taste_reinforce',
+  'taste_resolve_conflict',
+  'taste_lint',
+  'taste_push_pull',
+  'taste_list_providers',
+  'taste_set_provider',
+  'taste_configure_settings',
+  'taste_bootstrap',
+  'taste_record_micro_skill',
+  'taste_list_micro_skills',
+  'taste_get_economics',
+  'taste_manage_learning',
+  'taste_manage_micro_skill',
+];
 
 const DEFAULT_DB_PATH = process.env.TASTE_DB_PATH || path.resolve(process.cwd(), 'data', 'taste.db');
 
@@ -35,6 +62,7 @@ export function getDb(): DatabaseSync {
 
   initSchema(db);
   seedIfEmpty(db);
+  seedEconomicsIfEmpty(db);
 
   dbInstance = db;
   return db;
@@ -130,10 +158,45 @@ function initSchema(db: DatabaseSync): void {
       call_count INTEGER NOT NULL DEFAULT 1
     );
 
+    CREATE TABLE IF NOT EXISTS micro_skills (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL CHECK (scope IN ('project', 'global', 'remote')),
+      category TEXT NOT NULL CHECK (category IN ('test', 'build', 'lint', 'env', 'db', 'deploy', 'pattern')),
+      trigger_pattern TEXT NOT NULL,
+      fact_text TEXT NOT NULL,
+      corroborations INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL CHECK (status IN ('candidate', 'verified', 'retired')),
+      estimated_tokens_saved INTEGER NOT NULL DEFAULT 220,
+      last_used_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS economics_events (
+      id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL CHECK (event_type IN ('context_pruned', 'micro_skill_hit', 'loop_prevented', 'tool_pruned')),
+      agent_name TEXT NOT NULL,
+      file_path TEXT,
+      baseline_tokens INTEGER NOT NULL DEFAULT 0,
+      injected_tokens INTEGER NOT NULL DEFAULT 0,
+      tokens_saved INTEGER NOT NULL DEFAULT 0,
+      details TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS tool_usage (
+      tool_name TEXT PRIMARY KEY,
+      call_count INTEGER NOT NULL DEFAULT 0,
+      avg_response_tokens INTEGER NOT NULL DEFAULT 0,
+      last_called_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_learnings_scope_cat_status ON learnings(scope, category, status);
     CREATE INDEX IF NOT EXISTS idx_learnings_rule_key ON learnings(rule_key);
     CREATE INDEX IF NOT EXISTS idx_rl_episodes_learning ON rl_episodes(learning_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_micro_skills_status ON micro_skills(status, corroborations DESC);
+    CREATE INDEX IF NOT EXISTS idx_economics_created ON economics_events(created_at DESC);
   `);
 }
 
@@ -845,3 +908,386 @@ export function recordAgentTouch(db: DatabaseSync, agentName: string, transport:
     );
   }
 }
+
+function seedEconomicsIfEmpty(db: DatabaseSync): void {
+  const msRow = db.prepare('SELECT COUNT(*) as cnt FROM micro_skills').get() as { cnt: number };
+  const now = new Date().toISOString();
+  const earlier = new Date(Date.now() - 3600_000 * 2).toISOString();
+
+  if (msRow.cnt === 0) {
+    const insertMs = db.prepare(`
+      INSERT INTO micro_skills (
+        id, scope, category, trigger_pattern, fact_text, corroborations, status,
+        estimated_tokens_saved, last_used_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    insertMs.run(
+      'ms-node-test',
+      'project',
+      'test',
+      'running deterministic unit tests',
+      'Run npx tsx --test src/engine/taste1.test.ts (node:test native, no jest/vitest needed)',
+      3,
+      'verified',
+      380,
+      now,
+      earlier,
+      now,
+    );
+    insertMs.run(
+      'ms-sqlite-wal',
+      'project',
+      'db',
+      'initializing local SQLite connection',
+      'Enable PRAGMA journal_mode = WAL and busy_timeout = 5000 before prepared queries',
+      2,
+      'verified',
+      290,
+      earlier,
+      earlier,
+      earlier,
+    );
+    insertMs.run(
+      'ms-vite-hmr',
+      'project',
+      'env',
+      'starting Express + Vite middleware dev server',
+      'Pass CLI --port 3000 priority and attach HMR to httpServer so port 24678 never collides',
+      1,
+      'candidate',
+      260,
+      null,
+      now,
+      now,
+    );
+  }
+
+  const econRow = db.prepare('SELECT COUNT(*) as cnt FROM economics_events').get() as { cnt: number };
+  if (econRow.cnt === 0) {
+    const insertEcon = db.prepare(`
+      INSERT INTO economics_events (
+        id, event_type, agent_name, file_path, baseline_tokens, injected_tokens, tokens_saved, details, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertEcon.run(
+      'econ-seed-1',
+      'context_pruned',
+      'OpenCode CLI',
+      'server/db.ts',
+      940,
+      280,
+      660,
+      'Scoped database + security + typescript rules within 800-token budget',
+      earlier,
+    );
+    insertEcon.run(
+      'econ-seed-2',
+      'micro_skill_hit',
+      'Claude Code',
+      'src/engine/taste1.test.ts',
+      450,
+      70,
+      380,
+      'Verified micro-skill avoided 3 exploratory file reads for test runner',
+      now,
+    );
+  }
+
+  const toolRow = db.prepare('SELECT COUNT(*) as cnt FROM tool_usage').get() as { cnt: number };
+  if (toolRow.cnt === 0) {
+    const insertTool = db.prepare(`
+      INSERT INTO tool_usage (tool_name, call_count, avg_response_tokens, last_called_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    insertTool.run('taste_get_context', 14, 240, now);
+    insertTool.run('taste_record_signal', 8, 195, now);
+    insertTool.run('taste_reinforce', 5, 110, earlier);
+    insertTool.run('taste_lint', 3, 145, earlier);
+  }
+}
+
+function mapMicroSkillRow(r: Record<string, unknown>): MicroSkill {
+  return {
+    id: String(r.id),
+    scope: r.scope as TasteScope,
+    category: r.category as MicroSkillCategory,
+    triggerPattern: String(r.trigger_pattern),
+    factText: String(r.fact_text),
+    corroborations: Number(r.corroborations),
+    status: r.status as MicroSkillStatus,
+    estimatedTokensSaved: Number(r.estimated_tokens_saved),
+    lastUsedAt: r.last_used_at ? String(r.last_used_at) : null,
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+  };
+}
+
+export function listMicroSkills(
+  db: DatabaseSync,
+  filters?: { scope?: TasteScope | 'all'; status?: MicroSkillStatus | 'all'; category?: string },
+): MicroSkill[] {
+  let sql = 'SELECT * FROM micro_skills WHERE 1=1';
+  const params: Array<string> = [];
+
+  if (filters?.scope && filters.scope !== 'all') {
+    sql += ' AND scope = ?';
+    params.push(filters.scope);
+  }
+  if (filters?.status && filters.status !== 'all') {
+    sql += ' AND status = ?';
+    params.push(filters.status);
+  }
+  if (filters?.category && filters.category !== 'all') {
+    sql += ' AND category = ?';
+    params.push(filters.category);
+  }
+
+  sql += ' ORDER BY CASE status WHEN \'verified\' THEN 1 WHEN \'candidate\' THEN 2 ELSE 3 END, corroborations DESC, updated_at DESC';
+  const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+  return rows.map(mapMicroSkillRow);
+}
+
+export function upsertOrCorroborateMicroSkill(
+  db: DatabaseSync,
+  input: {
+    scope?: TasteScope;
+    category: MicroSkillCategory;
+    triggerPattern: string;
+    factText: string;
+    estimatedTokensSaved?: number;
+  },
+): { microSkill: MicroSkill; corroborated: boolean } {
+  const scope: TasteScope = input.scope ?? 'project';
+  const trigger = input.triggerPattern.trim();
+  const fact = input.factText.trim();
+  const now = new Date().toISOString();
+
+  const existing = db
+    .prepare(
+      `SELECT * FROM micro_skills
+       WHERE scope = ? AND status != 'retired' AND (LOWER(trigger_pattern) = LOWER(?) OR LOWER(fact_text) = LOWER(?))`,
+    )
+    .get(scope, trigger, fact) as Record<string, unknown> | undefined;
+
+  if (existing) {
+    const nextCorroborations = Number(existing.corroborations) + 1;
+    const nextStatus: MicroSkillStatus = nextCorroborations >= 2 ? 'verified' : 'candidate';
+    db.prepare(
+      `UPDATE micro_skills
+       SET corroborations = ?, status = ?, fact_text = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(nextCorroborations, nextStatus, fact, now, String(existing.id));
+
+    const updated = db.prepare('SELECT * FROM micro_skills WHERE id = ?').get(String(existing.id)) as Record<string, unknown>;
+    return { microSkill: mapMicroSkillRow(updated), corroborated: true };
+  }
+
+  const id = `ms-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const est = Math.max(80, Math.round(input.estimatedTokensSaved ?? 240));
+  db.prepare(
+    `INSERT INTO micro_skills (
+      id, scope, category, trigger_pattern, fact_text, corroborations, status,
+      estimated_tokens_saved, last_used_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 1, 'candidate', ?, NULL, ?, ?)`,
+  ).run(id, scope, input.category, trigger, fact, est, now, now);
+
+  const created = db.prepare('SELECT * FROM micro_skills WHERE id = ?').get(id) as Record<string, unknown>;
+  return { microSkill: mapMicroSkillRow(created), corroborated: false };
+}
+
+export function corroborateMicroSkillById(db: DatabaseSync, id: string): MicroSkill {
+  const existing = db.prepare('SELECT * FROM micro_skills WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  if (!existing) throw new Error(`Micro-skill ${id} not found`);
+
+  const nextCorroborations = Number(existing.corroborations) + 1;
+  const nextStatus: MicroSkillStatus = nextCorroborations >= 2 ? 'verified' : 'candidate';
+  const now = new Date().toISOString();
+
+  db.prepare(
+    `UPDATE micro_skills SET corroborations = ?, status = ?, updated_at = ? WHERE id = ?`,
+  ).run(nextCorroborations, nextStatus, now, id);
+
+  const updated = db.prepare('SELECT * FROM micro_skills WHERE id = ?').get(id) as Record<string, unknown>;
+  return mapMicroSkillRow(updated);
+}
+
+export function retireMicroSkill(db: DatabaseSync, id: string): { retired: boolean } {
+  const existing = db.prepare('SELECT * FROM micro_skills WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  if (!existing) throw new Error(`Micro-skill ${id} not found`);
+
+  db.prepare(`UPDATE micro_skills SET status = 'retired', updated_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+  return { retired: true };
+}
+
+export function touchMicroSkills(db: DatabaseSync, ids: string[]): void {
+  if (ids.length === 0) return;
+  const now = new Date().toISOString();
+  const stmt = db.prepare('UPDATE micro_skills SET last_used_at = ? WHERE id = ?');
+  for (const id of ids) {
+    stmt.run(now, id);
+  }
+}
+
+export function recordEconomicsEvent(
+  db: DatabaseSync,
+  input: {
+    eventType: EconomicsEventType;
+    agentName: string;
+    filePath?: string | null;
+    baselineTokens: number;
+    injectedTokens: number;
+    tokensSaved: number;
+    details: string;
+  },
+): EconomicsEvent {
+  const id = `econ-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO economics_events (
+      id, event_type, agent_name, file_path, baseline_tokens, injected_tokens, tokens_saved, details, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    input.eventType,
+    input.agentName,
+    input.filePath ?? null,
+    Math.max(0, Math.round(input.baselineTokens)),
+    Math.max(0, Math.round(input.injectedTokens)),
+    Math.max(0, Math.round(input.tokensSaved)),
+    input.details,
+    now,
+  );
+
+  return {
+    id,
+    eventType: input.eventType,
+    agentName: input.agentName,
+    filePath: input.filePath ?? null,
+    baselineTokens: Math.max(0, Math.round(input.baselineTokens)),
+    injectedTokens: Math.max(0, Math.round(input.injectedTokens)),
+    tokensSaved: Math.max(0, Math.round(input.tokensSaved)),
+    details: input.details,
+    createdAt: now,
+  };
+}
+
+export function recordToolUsage(db: DatabaseSync, toolName: string, responseTokens = 150): void {
+  const now = new Date().toISOString();
+  const existing = db
+    .prepare('SELECT call_count, avg_response_tokens FROM tool_usage WHERE tool_name = ?')
+    .get(toolName) as { call_count: number; avg_response_tokens: number } | undefined;
+
+  if (existing) {
+    const nextCount = existing.call_count + 1;
+    const nextAvg = Math.round((existing.avg_response_tokens * existing.call_count + responseTokens) / nextCount);
+    db.prepare('UPDATE tool_usage SET call_count = ?, avg_response_tokens = ?, last_called_at = ? WHERE tool_name = ?').run(
+      nextCount,
+      nextAvg,
+      now,
+      toolName,
+    );
+  } else {
+    db.prepare('INSERT INTO tool_usage (tool_name, call_count, avg_response_tokens, last_called_at) VALUES (?, 1, ?, ?)').run(
+      toolName,
+      Math.max(1, Math.round(responseTokens)),
+      now,
+    );
+  }
+}
+
+export function listToolUsage(db: DatabaseSync): ToolUsageStat[] {
+  const rows = db.prepare('SELECT * FROM tool_usage ORDER BY call_count DESC, tool_name ASC').all() as Array<
+    Record<string, unknown>
+  >;
+  return rows.map((r) => ({
+    toolName: String(r.tool_name),
+    callCount: Number(r.call_count),
+    avgResponseTokens: Number(r.avg_response_tokens),
+    lastCalledAt: r.last_called_at ? String(r.last_called_at) : null,
+  }));
+}
+
+export function getEconomicsSummary(db: DatabaseSync): EconomicsSummary {
+  const totals = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(tokens_saved), 0) as total_saved,
+         COALESCE(SUM(baseline_tokens), 0) as total_baseline,
+         COALESCE(SUM(injected_tokens), 0) as total_injected,
+         SUM(CASE WHEN event_type = 'loop_prevented' THEN 1 ELSE 0 END) as loops_prevented
+       FROM economics_events`,
+    )
+    .get() as {
+    total_saved: number;
+    total_baseline: number;
+    total_injected: number;
+    loops_prevented: number | null;
+  };
+
+  const msCounts = db
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as verified_cnt,
+         SUM(CASE WHEN status = 'candidate' THEN 1 ELSE 0 END) as candidate_cnt
+       FROM micro_skills`,
+    )
+    .get() as { verified_cnt: number | null; candidate_cnt: number | null };
+
+  const recentRows = db
+    .prepare('SELECT * FROM economics_events ORDER BY created_at DESC LIMIT 25')
+    .all() as Array<Record<string, unknown>>;
+
+  const recentEvents: EconomicsEvent[] = recentRows.map((r) => ({
+    id: String(r.id),
+    eventType: r.event_type as EconomicsEventType,
+    agentName: String(r.agent_name),
+    filePath: r.file_path ? String(r.file_path) : null,
+    baselineTokens: Number(r.baseline_tokens),
+    injectedTokens: Number(r.injected_tokens),
+    tokensSaved: Number(r.tokens_saved),
+    details: String(r.details),
+    createdAt: String(r.created_at),
+  }));
+
+  const totalBaselineTokens = Number(totals.total_baseline || 0);
+  const totalTokensSaved = Number(totals.total_saved || 0);
+  const totalInjectedTokens = Number(totals.total_injected || 0);
+  const compressionRatioPct =
+    totalBaselineTokens > 0 ? Math.round((totalTokensSaved / totalBaselineTokens) * 1000) / 10 : 0;
+
+  const toolUsage = listToolUsage(db);
+  const unusedToolRecommendations = recommendUnusedTools(ALL_MCP_TOOL_NAMES, toolUsage);
+
+  return {
+    totalTokensSaved,
+    totalBaselineTokens,
+    totalInjectedTokens,
+    compressionRatioPct,
+    loopsPrevented: Number(totals.loops_prevented || 0),
+    verifiedMicroSkills: Number(msCounts.verified_cnt || 0),
+    candidateMicroSkills: Number(msCounts.candidate_cnt || 0),
+    toolUsage,
+    unusedToolRecommendations,
+    recentEvents,
+  };
+}
+
+export function deleteProvider(db: DatabaseSync, providerId: string): { deleted: boolean; providers: ProviderConfig[] } {
+  const existing = db.prepare('SELECT id, is_active FROM providers WHERE id = ?').get(providerId) as
+    | { id: string; is_active: number }
+    | undefined;
+  if (!existing) {
+    throw new Error(`Provider ${providerId} not found`);
+  }
+
+  const totalRow = db.prepare('SELECT COUNT(*) as cnt FROM providers').get() as { cnt: number };
+  if (totalRow.cnt <= 1) {
+    throw new Error('Cannot delete the last remaining provider engine.');
+  }
+
+  db.prepare('DELETE FROM providers WHERE id = ?').run(providerId);
+  return { deleted: true, providers: listProviders(db) };
+}
+
+

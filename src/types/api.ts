@@ -1,5 +1,7 @@
 import {
+  EconomicsSummary,
   LintFileResult,
+  MicroSkill,
   ModelPreset,
   ProviderConfig,
   RlEpisode,
@@ -34,5 +36,8 @@ export interface OverviewData {
   providers: ProviderConfig[];
   settings: Record<string, string>;
   lintResults: LintFileResult[];
+  microSkills: MicroSkill[];
+  economics: EconomicsSummary;
   agents: AgentConnection[];
 }
+

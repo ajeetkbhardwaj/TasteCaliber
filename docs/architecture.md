@@ -84,6 +84,9 @@ TasteCaliber uses Node 22's built-in `node:sqlite` (`DatabaseSync`) with `PRAGMA
 | `providers` | Configured Local / NVIDIA NIM / OpenRouter inference endpoints and active Step 1/3 roles |
 | `settings` | Project/user `tasteLearning` toggles and namespace preferences |
 | `agent_connections` | Connected MCP clients (`http` / `stdio`), call counts, and last seen timestamps |
+| `micro_skills` | Corroborated repository operational facts (`candidate`, `verified`, `retired`) for turn-1 token savings |
+| `economics_events` | Telemetry ledger of context pruning, micro-skill hits, and failure-loop preventions |
+| `tool_usage` | Invocation counts and average response token footprints per MCP tool for pruning advice |
 
 ### Disk Markdown Sync (`.tastecaliber/taste/`)
 

@@ -1,16 +1,24 @@
 import 'dotenv/config';
+import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
+  ALL_MCP_TOOL_NAMES,
+  corroborateMicroSkillById,
+  deleteProvider,
   getDb,
+  getEconomicsSummary,
   getSettings,
   lintAllPackages,
   listLearnings,
+  listMicroSkills,
   listPackages,
   listProviders,
   listRlEpisodes,
   listSignals,
+  retireMicroSkill,
+  upsertOrCorroborateMicroSkill,
 } from './server/db.ts';
 import { createTasteMcpServer } from './server/mcp.ts';
 import {
@@ -21,6 +29,7 @@ import {
   processTasteSignal,
   pushOrPullPackages,
   resolveLearningConflict,
+  restoreLearning,
 } from './server/pipeline.ts';
 import {
   activateProviderRole,
@@ -28,9 +37,9 @@ import {
   updateProviderSettings,
 } from './server/providers.ts';
 import { META_RL_CONFIG } from './src/engine/taste1.ts';
-import {
-  NVIDIA_FAST_MODELS,
-  OPENROUTER_FREE_MODELS,
+import { NVIDIA_FAST_MODELS, OPENROUTER_FREE_MODELS } from './src/engine/types.ts';
+import type {
+  MicroSkillCategory,
   ProviderKind,
   ProviderRole,
   SignalType,
@@ -38,11 +47,38 @@ import {
   TasteScope,
 } from './src/engine/types.ts';
 
-const PORT = Number(process.env.PORT || 3000);
+function parseServerArgs(): { port: number; host: string } {
+  const args = process.argv.slice(2);
+  let cliPort: number | undefined;
+  let cliHost: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--port' && args[i + 1]) {
+      const parsed = Number(args[i + 1]);
+      if (Number.isFinite(parsed) && parsed > 0) cliPort = parsed;
+    } else if (arg.startsWith('--port=')) {
+      const parsed = Number(arg.slice('--port='.length));
+      if (Number.isFinite(parsed) && parsed > 0) cliPort = parsed;
+    } else if (arg === '--host' && args[i + 1]) {
+      cliHost = args[i + 1];
+    } else if (arg.startsWith('--host=')) {
+      cliHost = arg.slice('--host='.length);
+    }
+  }
+
+  const defaultPort = process.env.NODE_ENV === 'production' ? Number(process.env.PORT || 3000) : 3000;
+  const port = cliPort ?? defaultPort;
+  const host = cliHost ?? process.env.HOST ?? '0.0.0.0';
+  return { port, host };
+}
+
+const { port: PORT, host: HOST } = parseServerArgs();
 
 async function startServer(): Promise<void> {
   const db = getDb();
   const app = express();
+  const httpServer = http.createServer(app);
   app.use(express.json({ limit: '2mb' }));
 
   // CORS for Streamable HTTP MCP clients across IDEs & browsers
@@ -95,19 +131,7 @@ async function startServer(): Promise<void> {
       transport: 'streamable-http',
       endpoint: '/mcp',
       stdioCommand: 'npx tsx mcp-stdio.ts',
-      tools: [
-        'taste_get_context',
-        'taste_record_signal',
-        'taste_query_learnings',
-        'taste_reinforce',
-        'taste_resolve_conflict',
-        'taste_lint',
-        'taste_push_pull',
-        'taste_list_providers',
-        'taste_set_provider',
-        'taste_configure_settings',
-        'taste_bootstrap',
-      ],
+      tools: ALL_MCP_TOOL_NAMES,
     });
   });
 
@@ -124,6 +148,8 @@ async function startServer(): Promise<void> {
     const providers = listProviders(db);
     const settings = getSettings(db);
     const lintResults = lintAllPackages(db);
+    const microSkills = listMicroSkills(db);
+    const economics = getEconomicsSummary(db);
     const agents = db.prepare('SELECT * FROM agent_connections ORDER BY last_seen_at DESC').all();
 
     res.json({
@@ -137,8 +163,56 @@ async function startServer(): Promise<void> {
       providers,
       settings,
       lintResults,
+      microSkills,
+      economics,
       agents,
     });
+  });
+
+  // Economics & Micro-Skills (TokenEconomizer Phase 2)
+  app.get('/api/economics', (_req, res) => {
+    res.json(getEconomicsSummary(db));
+  });
+
+  app.get('/api/micro-skills', (req, res) => {
+    const scope = (req.query.scope as TasteScope | 'all') || 'all';
+    const status = (req.query.status as 'all' | 'verified' | 'candidate' | 'retired') || 'all';
+    const category = (req.query.category as string) || 'all';
+    res.json({ microSkills: listMicroSkills(db, { scope, status, category }) });
+  });
+
+  app.post('/api/micro-skills', (req, res) => {
+    const { scope, category, triggerPattern, factText, estimatedTokensSaved } = req.body ?? {};
+    if (!triggerPattern || !factText || String(triggerPattern).trim().length < 3 || String(factText).trim().length < 5) {
+      res.status(400).json({ error: 'triggerPattern (min 3 chars) and factText (min 5 chars) are required.' });
+      return;
+    }
+    const result = upsertOrCorroborateMicroSkill(db, {
+      scope: (scope as TasteScope) || 'project',
+      category: (category as MicroSkillCategory) || 'pattern',
+      triggerPattern: String(triggerPattern),
+      factText: String(factText),
+      estimatedTokensSaved: typeof estimatedTokensSaved === 'number' ? estimatedTokensSaved : undefined,
+    });
+    res.json({ ...result, microSkills: listMicroSkills(db), economics: getEconomicsSummary(db) });
+  });
+
+  app.post('/api/micro-skills/:id/corroborate', (req, res) => {
+    try {
+      const microSkill = corroborateMicroSkillById(db, req.params.id);
+      res.json({ microSkill, microSkills: listMicroSkills(db), economics: getEconomicsSummary(db) });
+    } catch (err) {
+      res.status(404).json({ error: err instanceof Error ? err.message : 'Micro-skill not found' });
+    }
+  });
+
+  app.delete('/api/micro-skills/:id', (req, res) => {
+    try {
+      const result = retireMicroSkill(db, req.params.id);
+      res.json({ ...result, microSkills: listMicroSkills(db), economics: getEconomicsSummary(db) });
+    } catch (err) {
+      res.status(404).json({ error: err instanceof Error ? err.message : 'Micro-skill not found' });
+    }
   });
 
   // Learnings CRUD & Meta-RL Feedback
@@ -168,6 +242,15 @@ async function startServer(): Promise<void> {
     try {
       const hard = req.query.hard === 'true';
       const result = archiveOrDeleteLearning(db, req.params.id, hard);
+      res.json(result);
+    } catch (err) {
+      res.status(404).json({ error: err instanceof Error ? err.message : 'Learning not found' });
+    }
+  });
+
+  app.post('/api/learnings/:id/restore', (req, res) => {
+    try {
+      const result = restoreLearning(db, req.params.id);
       res.json(result);
     } catch (err) {
       res.status(404).json({ error: err instanceof Error ? err.message : 'Learning not found' });
@@ -326,6 +409,15 @@ async function startServer(): Promise<void> {
     res.json({ ...result, providers: listProviders(db) });
   });
 
+  app.delete('/api/providers/:id', (req, res) => {
+    try {
+      const result = deleteProvider(db, req.params.id);
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Cannot delete provider' });
+    }
+  });
+
   // Settings
   app.put('/api/settings', (req, res) => {
     const updates = req.body as Record<string, unknown>;
@@ -340,7 +432,11 @@ async function startServer(): Promise<void> {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ws: process.env.DISABLE_HMR === 'true' ? false : { server: httpServer },
+        hmr: process.env.DISABLE_HMR !== 'true',
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -352,8 +448,8 @@ async function startServer(): Promise<void> {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`TasteCaliber MCP Server listening on http://localhost:${PORT} (MCP endpoint: /mcp)`);
+  httpServer.listen(PORT, HOST, () => {
+    console.log(`TasteCaliber MCP Server listening on http://${HOST}:${PORT} (MCP endpoint: /mcp)`);
   });
 }
 

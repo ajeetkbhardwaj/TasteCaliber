@@ -1,5 +1,5 @@
-import { DatabaseSync } from 'node:sqlite';
-import {
+import type { DatabaseSync } from 'node:sqlite';
+import type {
   ExtractedSignal,
   ProviderConfig,
   ProviderRole,

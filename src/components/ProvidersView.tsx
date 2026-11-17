@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Activity, Plus, CheckCircle2, AlertCircle, Zap, SlidersHorizontal } from 'lucide-react';
+import { Activity, Plus, CheckCircle2, AlertCircle, Zap, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { ModelPreset, ProviderConfig, ProviderKind, ProviderRole } from '../engine/types';
 
 interface ProvidersViewProps {
@@ -63,6 +63,11 @@ export function ProvidersView({
       body: JSON.stringify({ modelId: editModelId.trim(), baseUrl: editBaseUrl.trim() }),
     });
     setEditingProviderId(null);
+    await onRefresh();
+  };
+
+  const handleDeleteProvider = async (id: string) => {
+    await fetch(`/api/providers/${id}`, { method: 'DELETE' });
     await onRefresh();
   };
 
@@ -352,6 +357,17 @@ export function ProvidersView({
                     >
                       Both
                     </button>
+                    {!p.isActive && providers.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteProvider(p.id)}
+                        aria-label={`Remove ${p.name}`}
+                        title="Remove provider"
+                        className="p-1.5 text-slate-400 hover:text-red-700 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 

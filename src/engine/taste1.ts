@@ -1,16 +1,16 @@
-import {
+import { TASTE_CATEGORIES } from './types.ts';
+import type {
   CategoryScore,
   ExtractedSignal,
   LearningStatus,
   LintFileResult,
   LintIssue,
   SignalType,
-  TASTE_CATEGORIES,
   Taste1Decision,
   TasteCategory,
   TasteLearning,
   TasteScope,
-} from './types';
+} from './types.ts';
 
 export const META_RL_CONFIG = {
   betaNS: 0.18, // KL-divergence regularization against SFT baseline

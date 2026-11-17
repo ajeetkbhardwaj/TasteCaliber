@@ -6,8 +6,16 @@ type AgentClientId = 'opencode' | 'claude-code' | 'cursor' | 'windsurf' | 'cline
 const MCP_TOOLS = [
   {
     name: 'taste_get_context',
-    description: 'Fetch active enforced rules & low-confidence hints',
-    sampleArgs: { scope: 'all', includeHints: true, agentName: 'Workbench Inspector' },
+    description: 'Fetch token-budgeted, file-relevant rules & verified micro-skills',
+    sampleArgs: {
+      scope: 'all',
+      filePath: 'server/db.ts',
+      maxTokens: 800,
+      compact: true,
+      includeHints: true,
+      includeMicroSkills: true,
+      agentName: 'Workbench Inspector',
+    },
   },
   {
     name: 'taste_query_learnings',
@@ -72,6 +80,37 @@ const MCP_TOOLS = [
       scope: 'project',
       agentName: 'MCP Bootstrap',
     },
+  },
+  {
+    name: 'taste_record_micro_skill',
+    description: 'Store or corroborate an operational repository micro-skill',
+    sampleArgs: {
+      category: 'test',
+      triggerPattern: 'running unit tests',
+      factText: 'Run npx tsx --test src/engine/taste1.test.ts',
+      scope: 'project',
+      agentName: 'MCP Inspector',
+    },
+  },
+  {
+    name: 'taste_list_micro_skills',
+    description: 'List verified and candidate repository micro-skills',
+    sampleArgs: { scope: 'all', status: 'all' },
+  },
+  {
+    name: 'taste_get_economics',
+    description: 'Inspect tokens saved, compression ratio, loops prevented, and tool pruning tips',
+    sampleArgs: {},
+  },
+  {
+    name: 'taste_manage_learning',
+    description: 'Edit, archive, or restore an existing taste learning by ID',
+    sampleArgs: { learningId: 'lrn-ts-unknown', action: 'edit', rationale: 'Enforce strict MCP boundary typing' },
+  },
+  {
+    name: 'taste_manage_micro_skill',
+    description: 'Corroborate or retire a repository micro-skill by ID',
+    sampleArgs: { microSkillId: 'ms-vite-hmr', action: 'corroborate' },
   },
 ];
 
@@ -417,7 +456,7 @@ export function McpConnectView({ onSignalProcessed }: { onSignalProcessed: () =>
         </div>
 
         <div className="pt-2 border-t border-slate-200 space-y-2">
-          <h3 className="text-xs font-semibold text-slate-800">Exposed MCP Capabilities (11 Tools + 3 Resources)</h3>
+          <h3 className="text-xs font-semibold text-slate-800">Exposed MCP Capabilities (16 Tools + 3 Resources)</h3>
           <ul className="space-y-1.5 text-xs text-slate-600">
             <li>
               <span className="font-mono text-slate-900">taste_get_context</span> · Injects enforced rules &amp; hints before code generation

@@ -22,15 +22,19 @@ To interoperate reliably with any coding agent, TasteCaliber adheres to all core
 ## 2. Exposed MCP Tools
 
 ### `taste_get_context`
-Call before generating or reviewing code to load the developer's active preferences.
+Call before generating or reviewing code to load token-budgeted, file-relevant developer preferences and verified repository micro-skills.
 - **Arguments**:
   - `scope`: `'all' | 'project' | 'global' | 'remote'` (default `'all'`)
   - `categories`: optional array of canonical `taste-1` categories
+  - `filePath`: optional active file path (boosts relevant categories such as `database` or `react`)
+  - `maxTokens`: `number` in `[120, 4000]` (default `800`)
+  - `compact`: `boolean` (default `true`)
   - `includeHints`: `boolean` (default `true`)
+  - `includeMicroSkills`: `boolean` (default `true`)
   - `agentName`: `string` (default `'MCP Coding Agent'`)
 
 ### `taste_record_signal`
-Ingests an accept, reject, edit, code diff, or explicit instruction through the 4-step pipeline.
+Ingests an accept, reject, edit, code diff, or explicit instruction through the 4-step pipeline and returns `loopGuard` if 3+ consecutive corrective/reject signals occur on the same target (reset automatically when an `accept` signal succeeds).
 - **Arguments**:
   - `signalType`: `'accept' | 'reject' | 'edit' | 'diff' | 'prompt'` *(required)*
   - `rawInput`: `string` *(required, min 2 chars)*
@@ -66,6 +70,21 @@ Enables or pauses TasteCaliber learning at the project (`tasteLearningProject`) 
 
 ### `taste_bootstrap`
 Batch extracts and classifies multiple initial coding preferences from style notes, PR comments, or ESLint guidelines (`/learn-taste` workflow).
+
+### `taste_record_micro_skill`
+Records or corroborates a compact operational repository fact (`test`, `build`, `lint`, `env`, `db`, `deploy`, `pattern`). Reaching `>= 2` corroborations promotes it from `candidate` to `verified` for automatic turn-1 injection.
+
+### `taste_list_micro_skills`
+Lists `verified`, `candidate`, or `retired` repository micro-skills filtered by scope or category.
+
+### `taste_get_economics`
+Returns total tokens saved, baseline vs. injected compression percentage, failure loops prevented, verified micro-skill count, and unused MCP tools recommended for schema pruning.
+
+### `taste_manage_learning`
+Edits rule text/rationale/category, archives an obsolete preference, or restores an archived learning by `learningId`.
+
+### `taste_manage_micro_skill`
+Explicitly corroborates or retires a repository micro-skill by `microSkillId`.
 
 ---
 

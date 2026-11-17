@@ -4,7 +4,7 @@ import { OverviewData } from '../types/api';
 
 interface OverviewViewProps {
   data: OverviewData;
-  onNavigate: (tab: 'overview' | 'profile' | 'signals' | 'providers' | 'mcp') => void;
+  onNavigate: (tab: 'overview' | 'profile' | 'signals' | 'economics' | 'providers' | 'mcp') => void;
   onRefresh: () => Promise<void>;
 }
 
@@ -18,10 +18,11 @@ export function OverviewView({ data, onNavigate, onRefresh }: OverviewViewProps)
   const handleToggleLearning = async () => {
     setToggling(true);
     try {
+      const next = !learningEnabled;
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tasteLearningProject: !learningEnabled }),
+        body: JSON.stringify({ tasteLearningProject: next, tasteLearningUser: next }),
       });
       await onRefresh();
     } finally {
@@ -105,6 +106,37 @@ export function OverviewView({ data, onNavigate, onRefresh }: OverviewViewProps)
             &beta;<sub>NS</sub> = {data.metaRlConfig.betaNS} · &gamma;<sub>NS</sub> = {data.metaRlConfig.gammaNS}
           </p>
         </div>
+      </section>
+
+      {/* TokenEconomizer Snapshot */}
+      <section className="bg-white border border-slate-200 rounded-lg px-5 py-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-6 text-xs">
+          <div>
+            <span className="text-slate-500 block">Tokens Saved</span>
+            <span className="font-mono font-semibold text-slate-900 text-sm tabular-nums">
+              {data.economics.totalTokensSaved.toLocaleString()} tok ({data.economics.compressionRatioPct.toFixed(1)}% pruned)
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block">Verified Micro-Skills</span>
+            <span className="font-mono font-semibold text-slate-900 text-sm tabular-nums">
+              {data.economics.verifiedMicroSkills} active
+            </span>
+          </div>
+          <div>
+            <span className="text-slate-500 block">Failure Loops Prevented</span>
+            <span className="font-mono font-semibold text-slate-900 text-sm tabular-nums">
+              {data.economics.loopsPrevented}
+            </span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => onNavigate('economics')}
+          className="text-xs font-medium text-blue-700 hover:underline inline-flex items-center gap-1 whitespace-nowrap cursor-pointer"
+        >
+          Inspect Token Economics <ArrowRight className="w-3.5 h-3.5" />
+        </button>
       </section>
 
       {/* 4-Step Pipeline Architecture */}

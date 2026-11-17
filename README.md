@@ -13,6 +13,10 @@
   3. **Markdown Compiler & Linter**: Generates readable, lint-validated `.tastecaliber/taste/**/taste.md` files (with optional LLM synthesis gated by strict structural validation).
   4. **Local SQLite Storage (`data/taste.db`)**: Powered by Node 22's built-in `node:sqlite` in WAL mode with `busy_timeout=5000` and indexed queries for multi-agent concurrency.
 - **Zero-Cost & Agent-Managed Models**: Connects to local engines or free-tier APIs (NVIDIA NIM, OpenRouter), switchable at any time directly from any coding agent via `taste_list_providers` and `taste_set_provider`.
+- **TokenEconomizer Cost Control (`src/engine/economics.ts`)**:
+  - **File-Aware Token-Budgeted Injection**: `taste_get_context` scores rules against `filePath`, trims to `maxTokens` (default `800`), reserves space for verified repo micro-skills, and logs baseline vs. injected token savings.
+  - **Corroborated Repository Micro-Skills**: Captures compact repo operational facts (`candidate -> verified` at `>= 2` corroborations) to skip cold-start exploration turns.
+  - **Failure-Loop Guard & Tool Pruning**: Detects `3+` consecutive corrective/reject signals on the same file or rule (`loopGuard`), resets on `'accept'`, and tracks per-tool usage to flag unused MCP schemas.
 
 ---
 
@@ -114,7 +118,7 @@ Read the step-by-step setup in [docs/deployment.md](docs/deployment.md).
 
 ## Documentation Index
 
-- **[Architecture & `taste-1` Engine](docs/architecture.md)** — 4-step pipeline, Meta-RL objective math, contradiction detection, SQLite schema, and `.tastecaliber/taste/` sync.
-- **[MCP Protocol & Client Setup](docs/mcp-protocol.md)** — Required MCP server specifications, all 11 tools, 3 resources, prompt templates, and agent integration configs.
+- **[Architecture & `taste-1` Engine](docs/architecture.md)** — 4-step pipeline, Meta-RL objective math, contradiction detection, SQLite schema (including `micro_skills`, `economics_events`, `tool_usage`), and `.tastecaliber/taste/` sync.
+- **[MCP Protocol & Client Setup](docs/mcp-protocol.md)** — Required MCP server specifications, all 16 tools, 3 resources, prompt templates, and agent integration configs.
 - **[LLM Providers & Local Engines](docs/providers.md)** — Configuring Ollama, LM Studio, vLLM, NVIDIA NIM, and OpenRouter free models.
-- **[Deployment Guide](docs/deployment.md)** — Deploying TasteCaliber on Cloudflare Workers (recommended), Vercel Functions, Docker/VPS, and local stdio.
+- **[Deployment Guide](docs/deployment.md)** — Deploying TasteCaliber via `worker.ts` + `wrangler.toml` (Cloudflare Workers), Vercel Functions, `Dockerfile`, and local stdio.

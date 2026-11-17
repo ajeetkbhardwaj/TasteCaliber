@@ -217,8 +217,92 @@ export interface LintFileResult {
   issues: LintIssue[];
 }
 
+export interface LoopGuardResult {
+  loopDetected: boolean;
+  repeatCount: number;
+  triggerKey: string;
+  interventionAdvice: string | null;
+}
+
+export type MicroSkillCategory = 'test' | 'build' | 'lint' | 'env' | 'db' | 'deploy' | 'pattern';
+export type MicroSkillStatus = 'candidate' | 'verified' | 'retired';
+
+export interface MicroSkill {
+  id: string;
+  scope: TasteScope;
+  category: MicroSkillCategory;
+  triggerPattern: string;
+  factText: string;
+  corroborations: number;
+  status: MicroSkillStatus;
+  estimatedTokensSaved: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EconomicsEventType =
+  | 'context_pruned'
+  | 'micro_skill_hit'
+  | 'loop_prevented'
+  | 'tool_pruned';
+
+export interface EconomicsEvent {
+  id: string;
+  eventType: EconomicsEventType;
+  agentName: string;
+  filePath: string | null;
+  baselineTokens: number;
+  injectedTokens: number;
+  tokensSaved: number;
+  details: string;
+  createdAt: string;
+}
+
+export interface ToolUsageStat {
+  toolName: string;
+  callCount: number;
+  avgResponseTokens: number;
+  lastCalledAt: string | null;
+}
+
+export interface UnusedToolRecommendation {
+  toolName: string;
+  callCount: number;
+  estimatedSchemaTokensSaved: number;
+  recommendation: string;
+}
+
+export interface EconomicsSummary {
+  totalTokensSaved: number;
+  totalBaselineTokens: number;
+  totalInjectedTokens: number;
+  compressionRatioPct: number;
+  loopsPrevented: number;
+  verifiedMicroSkills: number;
+  candidateMicroSkills: number;
+  toolUsage: ToolUsageStat[];
+  unusedToolRecommendations: UnusedToolRecommendation[];
+  recentEvents: EconomicsEvent[];
+}
+
+export interface ContextBudgetResult {
+  enforced: TasteLearning[];
+  hints: TasteLearning[];
+  conflicted: TasteLearning[];
+  omittedCount: number;
+  injectedMicroSkills: MicroSkill[];
+  baselineTokens: number;
+  injectedTokens: number;
+  tokensSaved: number;
+  compressionRatioPct: number;
+  matchedCategories: TasteCategory[];
+  markdownText: string;
+}
+
 export interface PipelineStepTrace {
   dryRun?: boolean;
+  loopGuard?: LoopGuardResult;
   step1: ExtractedSignal;
   step2: Taste1Decision;
   step3: {
@@ -234,3 +318,4 @@ export interface PipelineStepTrace {
     syncedFiles: string[];
   };
 }
+

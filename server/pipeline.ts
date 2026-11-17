@@ -1,9 +1,9 @@
-import { DatabaseSync } from 'node:sqlite';
-import {
+import type { DatabaseSync } from 'node:sqlite';
+import { TASTE_CATEGORIES } from '../src/engine/types.ts';
+import type {
   PipelineStepTrace,
   RlEpisode,
   SignalType,
-  TASTE_CATEGORIES,
   TasteCategory,
   TasteLearning,
   TasteScope,
@@ -20,9 +20,12 @@ import {
   getSettings,
   listLearnings,
   listPackages,
+  listSignals,
   recordAgentTouch,
+  recordEconomicsEvent,
   syncAllPackageMarkdown,
 } from './db.ts';
+import { detectFailureLoop } from '../src/engine/economics.ts';
 import { runStep1InputExtraction, runStep3OutputWriter } from './providers.ts';
 
 export function isTasteLearningEnabled(db: DatabaseSync, scope: TasteScope): boolean {
@@ -74,6 +77,14 @@ export async function processTasteSignal(
     diffBefore: input.diffBefore,
     diffAfter: input.diffAfter,
     existingLearnings,
+  });
+
+  const recentSignals = listSignals(db, 12);
+  const loopGuard = detectFailureLoop({
+    filePath: input.filePath,
+    ruleKey: step2.ruleKey,
+    signalType: input.signalType,
+    recentSignals,
   });
 
   const now = new Date().toISOString();
@@ -128,6 +139,7 @@ export async function processTasteSignal(
     });
     return {
       dryRun: true,
+      loopGuard,
       step1,
       step2,
       step3,
@@ -325,8 +337,21 @@ export async function processTasteSignal(
   const syncedFiles = syncAllPackageMarkdown(db);
   const lint = lintTasteMarkdown('.tastecaliber/taste/taste.md', step3.markdownPreview);
 
+  if (loopGuard.loopDetected) {
+    recordEconomicsEvent(db, {
+      eventType: 'loop_prevented',
+      agentName: sourceAgent,
+      filePath: input.filePath ?? null,
+      baselineTokens: 1500,
+      injectedTokens: 300,
+      tokensSaved: 1200,
+      details: loopGuard.interventionAdvice ?? `Failure loop detected on ${loopGuard.triggerKey}`,
+    });
+  }
+
   return {
     dryRun: false,
+    loopGuard,
     step1,
     step2,
     step3,
@@ -465,6 +490,26 @@ export function archiveOrDeleteLearning(
 
   const syncedFiles = syncAllPackageMarkdown(db);
   return { archived: true, syncedFiles };
+}
+
+export function restoreLearning(
+  db: DatabaseSync,
+  learningId: string,
+): { learning: TasteLearning; syncedFiles: string[] } {
+  const existing = getLearningById(db, learningId);
+  if (!existing) {
+    throw new Error(`Learning ${learningId} not found`);
+  }
+
+  const restoredStatus = existing.confidence >= 0.72 ? 'enforced' : 'hint';
+  db.prepare(`UPDATE learnings SET status = ?, updated_at = ? WHERE id = ?`).run(
+    restoredStatus,
+    new Date().toISOString(),
+    learningId,
+  );
+
+  const syncedFiles = syncAllPackageMarkdown(db);
+  return { learning: getLearningById(db, learningId)!, syncedFiles };
 }
 
 export function resolveLearningConflict(

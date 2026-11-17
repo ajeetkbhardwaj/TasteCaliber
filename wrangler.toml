@@ -1,0 +1,11 @@
+name = "tastecaliber-mcp"
+main = "worker.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Replace database_id after running: wrangler d1 create tastecaliber-db
+[[d1_databases]]
+binding = "DB"
+database_name = "tastecaliber-db"
+database_id = "tastecaliber-local-d1"
+migrations_dir = "migrations"

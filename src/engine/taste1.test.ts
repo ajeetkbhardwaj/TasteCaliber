@@ -8,8 +8,8 @@ import {
   findSimilarLearning,
   lintTasteMarkdown,
   updateMetaRL,
-} from './taste1';
-import { TasteLearning } from './types';
+} from './taste1.ts';
+import type { TasteLearning } from './types.ts';
 
 function makeLearning(overrides: Partial<TasteLearning> = {}): TasteLearning {
   return {
@@ -204,3 +204,159 @@ test('comparative "Prefer A over B" rules do not trigger false-positive conflict
   assert.equal(decision.contradictsId, null);
   assert.notEqual(decision.recommendedStatus, 'conflicted');
 });
+
+import {
+  detectFailureLoop,
+  recommendUnusedTools,
+  selectBudgetedLearnings,
+} from './economics.ts';
+
+test('selectBudgetedLearnings prioritizes file-relevant rules and respects maxTokens budget', () => {
+  const dbRule = makeLearning({
+    id: 'lrn-db',
+    category: 'database',
+    ruleText: 'Use parameterized SQLite statements with WAL mode enabled across all database handlers and migrations',
+    confidence: 0.9,
+  });
+  const reactRule = makeLearning({
+    id: 'lrn-react',
+    category: 'react',
+    ruleText: 'Use native button and label elements instead of clickable div elements in JSX views and forms',
+    confidence: 0.88,
+  });
+  const apiRule = makeLearning({
+    id: 'lrn-api',
+    category: 'api',
+    ruleText: 'Validate Express JSON request bodies with explicit zod schemas before database persistence calls',
+    confidence: 0.85,
+  });
+  const fmtRule = makeLearning({
+    id: 'lrn-fmt',
+    category: 'formatting',
+    ruleText: 'Use consistent single quotes and two-space indentation across TypeScript utility modules',
+    confidence: 0.82,
+  });
+  const cliRule = makeLearning({
+    id: 'lrn-cli',
+    category: 'cli',
+    ruleText: 'Return structured JSON exit codes and clean stdout logs from CLI transport wrappers',
+    confidence: 0.79,
+  });
+
+  const budgeted = selectBudgetedLearnings({
+    learnings: [reactRule, cliRule, fmtRule, apiRule, dbRule],
+    filePath: 'server/db.ts',
+    maxTokens: 120,
+    compact: true,
+  });
+
+  assert.ok(budgeted.matchedCategories.includes('database'));
+  assert.equal(budgeted.enforced[0].id, 'lrn-db');
+  assert.ok(budgeted.injectedTokens <= 145);
+  assert.ok(budgeted.omittedCount >= 1);
+  assert.ok(budgeted.tokensSaved > 0);
+});
+
+test('detectFailureLoop triggers intervention on 3+ corrective/reject signals for same file', () => {
+  const recent = [
+    {
+      filePath: 'server/db.ts',
+      signalType: 'reject' as const,
+      taste1Decision: { ruleKey: 'sqlite-wal' } as ReturnType<typeof classifyWithTaste1>,
+    },
+    {
+      filePath: 'server/db.ts',
+      signalType: 'edit' as const,
+      taste1Decision: { ruleKey: 'sqlite-wal' } as ReturnType<typeof classifyWithTaste1>,
+    },
+  ];
+
+  const guard = detectFailureLoop({
+    filePath: 'server/db.ts',
+    ruleKey: 'sqlite-wal',
+    signalType: 'reject',
+    recentSignals: recent,
+  });
+
+  assert.equal(guard.loopDetected, true);
+  assert.equal(guard.repeatCount, 3);
+  assert.ok(guard.interventionAdvice && guard.interventionAdvice.includes('Failure-loop guard'));
+});
+
+test('recommendUnusedTools flags zero-call MCP tools with token overhead estimate', () => {
+  const recs = recommendUnusedTools(
+    ['taste_get_context', 'taste_record_signal', 'taste_lint'],
+    [
+      { toolName: 'taste_get_context', callCount: 5, avgResponseTokens: 190, lastCalledAt: '2026-11-17T00:00:00Z' },
+    ],
+  );
+
+  assert.equal(recs.length, 2);
+  assert.equal(recs[0].toolName, 'taste_record_signal');
+  assert.equal(recs[0].estimatedSchemaTokensSaved, 165);
+});
+
+test('selectBudgetedLearnings reserves slot for verified micro-skills under tight budgets', () => {
+  const budgeted = selectBudgetedLearnings({
+    learnings: [
+      makeLearning({ id: 'l1', category: 'database', ruleText: 'Always use parameterized SQLite prepared statements across handlers' }),
+      makeLearning({ id: 'l2', category: 'typescript', ruleText: 'Avoid explicit any and enforce strict return types on exported functions' }),
+      makeLearning({ id: 'l3', category: 'api', ruleText: 'Validate JSON request payloads with zod schemas in API route handlers' }),
+    ],
+    microSkills: [
+      {
+        id: 'ms-1',
+        scope: 'project',
+        category: 'test',
+        triggerPattern: 'running unit tests',
+        factText: 'Run npx tsx --test src/engine/taste1.test.ts',
+        corroborations: 3,
+        status: 'verified',
+        estimatedTokensSaved: 380,
+        lastUsedAt: null,
+        createdAt: '2026-11-17T00:00:00Z',
+        updatedAt: '2026-11-17T00:00:00Z',
+      },
+    ],
+    filePath: 'server/db.ts',
+    maxTokens: 240,
+    compact: true,
+    includeMicroSkills: true,
+  });
+
+  assert.equal(budgeted.injectedMicroSkills.length, 1);
+  assert.equal(budgeted.injectedMicroSkills[0].id, 'ms-1');
+  assert.ok(budgeted.markdownText.includes('Verified Repo Micro-Skills'));
+});
+
+test('detectFailureLoop clears streak when a more recent accept signal exists on the same file', () => {
+  const recent = [
+    {
+      filePath: 'server/db.ts',
+      signalType: 'accept' as const,
+      taste1Decision: { ruleKey: 'sqlite-wal' } as ReturnType<typeof classifyWithTaste1>,
+    },
+    {
+      filePath: 'server/db.ts',
+      signalType: 'reject' as const,
+      taste1Decision: { ruleKey: 'sqlite-wal' } as ReturnType<typeof classifyWithTaste1>,
+    },
+    {
+      filePath: 'server/db.ts',
+      signalType: 'edit' as const,
+      taste1Decision: { ruleKey: 'sqlite-wal' } as ReturnType<typeof classifyWithTaste1>,
+    },
+  ];
+
+  const guard = detectFailureLoop({
+    filePath: 'server/db.ts',
+    ruleKey: 'sqlite-wal',
+    signalType: 'reject',
+    recentSignals: recent,
+  });
+
+  assert.equal(guard.loopDetected, false);
+  assert.equal(guard.repeatCount, 1);
+});
+
+

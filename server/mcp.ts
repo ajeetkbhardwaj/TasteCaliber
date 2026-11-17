@@ -1,29 +1,41 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import {
+  corroborateMicroSkillById,
+  getEconomicsSummary,
   getSettings,
   lintAllPackages,
   listLearnings,
+  listMicroSkills,
   listPackages,
   listProviders,
   listRlEpisodes,
   recordAgentTouch,
+  recordEconomicsEvent,
+  recordToolUsage,
+  retireMicroSkill,
+  touchMicroSkills,
+  upsertOrCorroborateMicroSkill,
 } from './db.ts';
 import {
   applyLearningFeedback,
+  archiveOrDeleteLearning,
   bootstrapTasteFromSnippets,
+  editLearning,
   processTasteSignal,
   pushOrPullPackages,
   resolveLearningConflict,
+  restoreLearning,
 } from './pipeline.ts';
 import { activateProviderRole } from './providers.ts';
+import { estimateTokens, selectBudgetedLearnings } from '../src/engine/economics.ts';
 import {
   NVIDIA_FAST_MODELS,
   OPENROUTER_FREE_MODELS,
   TASTE_CATEGORIES,
-  TasteScope,
 } from '../src/engine/types.ts';
+import type { TasteCategory, TasteScope } from '../src/engine/types.ts';
 
 export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | 'stdio' = 'http'): McpServer {
   const server = new McpServer({
@@ -31,70 +43,108 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
     version: '1.0.0',
   });
 
-  // 1. taste_get_context — coding agents call this before writing/reviewing code
+  // 1. taste_get_context — file-aware, token-budgeted context + verified repo micro-skills
   server.registerTool(
     'taste_get_context',
     {
-      title: 'Get Coding Taste Context',
+      title: 'Get Budgeted Coding Taste Context',
       description:
-        'Retrieve active enforced rules, low-confidence hints, and flagged conflicts from the local SQLite taste profile so the coding agent aligns with the user’s style and architecture.',
+        'Retrieve token-budgeted, file-relevant coding rules and verified repository micro-skills from local SQLite so agents stay taste-aligned without prompt bloat.',
       inputSchema: {
         scope: z.enum(['all', 'project', 'global', 'remote']).optional().default('all'),
         categories: z.array(z.enum(TASTE_CATEGORIES)).optional(),
+        filePath: z.string().optional(),
+        maxTokens: z.number().min(120).max(4000).optional().default(800),
+        compact: z.boolean().optional().default(true),
         includeHints: z.boolean().optional().default(true),
+        includeMicroSkills: z.boolean().optional().default(true),
         agentName: z.string().optional().default('MCP Coding Agent'),
       },
     },
-    async ({ scope, categories, includeHints, agentName }) => {
+    async ({ scope, categories, filePath, maxTokens, compact, includeHints, includeMicroSkills, agentName }) => {
       recordAgentTouch(db, agentName, transportKind);
-      const learnings = listLearnings(db, { scope: scope ?? 'all' });
-      const filtered = learnings.filter((l) => {
-        if (l.status === 'archived') return false;
-        if (!includeHints && l.status === 'hint') return false;
-        if (categories && categories.length > 0 && !categories.includes(l.category)) return false;
-        return true;
+      const learnings = listLearnings(db);
+      const microSkills = listMicroSkills(db);
+
+      const budgeted = selectBudgetedLearnings({
+        learnings,
+        microSkills,
+        scope: scope ?? 'all',
+        categories,
+        filePath,
+        maxTokens,
+        compact,
+        includeHints,
+        includeMicroSkills,
       });
 
-      const enforced = filtered.filter((l) => l.status === 'enforced');
-      const hints = filtered.filter((l) => l.status === 'hint');
-      const conflicted = filtered.filter((l) => l.status === 'conflicted');
+      if (budgeted.tokensSaved > 0) {
+        recordEconomicsEvent(db, {
+          eventType: 'context_pruned',
+          agentName,
+          filePath: filePath ?? null,
+          baselineTokens: budgeted.baselineTokens,
+          injectedTokens: budgeted.injectedTokens,
+          tokensSaved: budgeted.tokensSaved,
+          details: `Budgeted context (${budgeted.compressionRatioPct}% reduction, ${budgeted.omittedCount} low-priority rules omitted)`,
+        });
+      }
 
-      const summaryText = [
-        `# Active TasteCaliber Context (${filtered.length} rules)`,
-        '',
-        `## Enforced Preferences (${enforced.length})`,
-        ...enforced.map((l) => `- [${l.category} | conf=${l.confidence.toFixed(2)}] ${l.ruleText}`),
-        '',
-        `## Low-Confidence Hints (${hints.length})`,
-        ...hints.map((l) => `- [${l.category} | conf=${l.confidence.toFixed(2)}] ${l.ruleText}`),
-        ...(conflicted.length > 0
-          ? [
-              '',
-              `## Flagged Conflicts Requiring Review (${conflicted.length})`,
-              ...conflicted.map((l) => `- [CONFLICT ${l.id}] ${l.ruleText} (conflicts with ${l.conflictsWithId})`),
-            ]
-          : []),
-      ].join('\n');
+      if (budgeted.injectedMicroSkills.length > 0) {
+        touchMicroSkills(
+          db,
+          budgeted.injectedMicroSkills.map((ms) => ms.id),
+        );
+        const msSavings = budgeted.injectedMicroSkills.reduce((acc, m) => acc + m.estimatedTokensSaved, 0);
+        recordEconomicsEvent(db, {
+          eventType: 'micro_skill_hit',
+          agentName,
+          filePath: filePath ?? null,
+          baselineTokens: msSavings + 60,
+          injectedTokens: 60,
+          tokensSaved: msSavings,
+          details: `Injected ${budgeted.injectedMicroSkills.length} verified micro-skill(s)`,
+        });
+      }
+
+      recordToolUsage(db, 'taste_get_context', budgeted.injectedTokens);
 
       return {
         content: [
-          { type: 'text', text: summaryText },
+          { type: 'text', text: budgeted.markdownText },
           {
             type: 'text',
-            text: JSON.stringify({ enforced, hints, conflicted }, null, 2),
+            text: JSON.stringify(
+              {
+                enforced: budgeted.enforced,
+                hints: budgeted.hints,
+                conflicted: budgeted.conflicted,
+                injectedMicroSkills: budgeted.injectedMicroSkills,
+                economics: {
+                  baselineTokens: budgeted.baselineTokens,
+                  injectedTokens: budgeted.injectedTokens,
+                  tokensSaved: budgeted.tokensSaved,
+                  compressionRatioPct: budgeted.compressionRatioPct,
+                  omittedCount: budgeted.omittedCount,
+                  matchedCategories: budgeted.matchedCategories,
+                },
+              },
+              null,
+              2,
+            ),
           },
         ],
       };
     },
   );
 
-  // 2. taste_record_signal — ingests prompt, accept, reject, or diff through the 4-step pipeline
+  // 2. taste_record_signal — ingests prompt, accept, reject, or diff through the 4-step pipeline + loop guard
   server.registerTool(
     'taste_record_signal',
     {
       title: 'Record Coding Signal',
       description:
-        'Run the 4-step TasteCaliber pipeline (1: Input LLM extraction, 2: taste-1 neuro-symbolic classification & conflict detection, 3: Output markdown compilation, 4: Local SQLite + .tastecaliber/taste sync).',
+        'Run the 4-step TasteCaliber pipeline (1: Input LLM extraction, 2: taste-1 neuro-symbolic classification & conflict detection, 3: Output markdown compilation, 4: Local SQLite + .tastecaliber/taste sync) with failure-loop intervention.',
       inputSchema: {
         signalType: z.enum(['accept', 'reject', 'edit', 'diff', 'prompt']),
         rawInput: z.string().min(2),
@@ -117,29 +167,28 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
         diffAfter,
       });
 
+      const payload = JSON.stringify(
+        {
+          dryRun: Boolean(trace.dryRun),
+          learningId: trace.step4.learning.id,
+          category: trace.step2.category,
+          confidence: trace.step4.learning.confidence,
+          status: trace.step4.learning.status,
+          contradictsId: trace.step2.contradictsId,
+          contradictionReason: trace.step2.contradictionReason,
+          loopGuard: trace.loopGuard,
+          extractorMode: trace.step1.extractorMode,
+          modelUsed: trace.step1.modelUsed,
+          fallbackChainUsed: trace.step1.fallbackChainUsed,
+          syncedFiles: trace.step4.syncedFiles,
+        },
+        null,
+        2,
+      );
+      recordToolUsage(db, 'taste_record_signal', estimateTokens(payload));
+
       return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(
-              {
-                dryRun: Boolean(trace.dryRun),
-                learningId: trace.step4.learning.id,
-                category: trace.step2.category,
-                confidence: trace.step4.learning.confidence,
-                status: trace.step4.learning.status,
-                contradictsId: trace.step2.contradictsId,
-                contradictionReason: trace.step2.contradictionReason,
-                extractorMode: trace.step1.extractorMode,
-                modelUsed: trace.step1.modelUsed,
-                fallbackChainUsed: trace.step1.fallbackChainUsed,
-                syncedFiles: trace.step4.syncedFiles,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
+        content: [{ type: 'text', text: payload }],
       };
     },
   );
@@ -160,8 +209,10 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
     },
     async ({ scope, category, status, search, minConfidence }) => {
       const items = listLearnings(db, { scope, category, status, search, minConfidence });
+      const out = JSON.stringify({ count: items.length, learnings: items }, null, 2);
+      recordToolUsage(db, 'taste_query_learnings', estimateTokens(out));
       return {
-        content: [{ type: 'text', text: JSON.stringify({ count: items.length, learnings: items }, null, 2) }],
+        content: [{ type: 'text', text: out }],
       };
     },
   );
@@ -179,8 +230,10 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
     },
     async ({ learningId, feedback }) => {
       const result = applyLearningFeedback(db, learningId, feedback);
+      const out = JSON.stringify(result, null, 2);
+      recordToolUsage(db, 'taste_reinforce', estimateTokens(out));
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: out }],
       };
     },
   );
@@ -198,8 +251,10 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
     },
     async ({ conflictedLearningId, resolution }) => {
       const res = resolveLearningConflict(db, conflictedLearningId, resolution);
+      const out = JSON.stringify(res, null, 2);
+      recordToolUsage(db, 'taste_resolve_conflict', estimateTokens(out));
       return {
-        content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+        content: [{ type: 'text', text: out }],
       };
     },
   );
@@ -214,8 +269,10 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
     },
     async () => {
       const results = lintAllPackages(db);
+      const out = JSON.stringify({ results }, null, 2);
+      recordToolUsage(db, 'taste_lint', estimateTokens(out));
       return {
-        content: [{ type: 'text', text: JSON.stringify({ results }, null, 2) }],
+        content: [{ type: 'text', text: out }],
       };
     },
   );
@@ -235,8 +292,10 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
     },
     async ({ action, fromScope, toScope, overwrite }) => {
       const summary = pushOrPullPackages(db, action, fromScope as TasteScope, toScope as TasteScope, overwrite);
+      const out = JSON.stringify(summary, null, 2);
+      recordToolUsage(db, 'taste_push_pull', estimateTokens(out));
       return {
-        content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }],
+        content: [{ type: 'text', text: out }],
       };
     },
   );
@@ -252,21 +311,18 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
     },
     async () => {
       const providers = listProviders(db);
+      const out = JSON.stringify(
+        {
+          providers,
+          nvidiaFastModels: NVIDIA_FAST_MODELS,
+          openRouterFreeModels: OPENROUTER_FREE_MODELS,
+        },
+        null,
+        2,
+      );
+      recordToolUsage(db, 'taste_list_providers', estimateTokens(out));
       return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(
-              {
-                providers,
-                nvidiaFastModels: NVIDIA_FAST_MODELS,
-                openRouterFreeModels: OPENROUTER_FREE_MODELS,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
+        content: [{ type: 'text', text: out }],
       };
     },
   );
@@ -286,8 +342,10 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
     },
     async ({ providerId, role, modelId }) => {
       const updated = activateProviderRole(db, providerId, role, modelId);
+      const out = JSON.stringify({ providers: updated }, null, 2);
+      recordToolUsage(db, 'taste_set_provider', estimateTokens(out));
       return {
-        content: [{ type: 'text', text: JSON.stringify({ providers: updated }, null, 2) }],
+        content: [{ type: 'text', text: out }],
       };
     },
   );
@@ -311,8 +369,10 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
       if (typeof tasteLearningUser === 'boolean') {
         stmt.run('tasteLearningUser', String(tasteLearningUser));
       }
+      const out = JSON.stringify({ settings: getSettings(db) }, null, 2);
+      recordToolUsage(db, 'taste_configure_settings', estimateTokens(out));
       return {
-        content: [{ type: 'text', text: JSON.stringify({ settings: getSettings(db) }, null, 2) }],
+        content: [{ type: 'text', text: out }],
       };
     },
   );
@@ -338,8 +398,144 @@ export function createTasteMcpServer(db: DatabaseSync, transportKind: 'http' | '
         scope,
         sourceAgent: agentName,
       });
+      const out = JSON.stringify(res, null, 2);
+      recordToolUsage(db, 'taste_bootstrap', estimateTokens(out));
       return {
-        content: [{ type: 'text', text: JSON.stringify(res, null, 2) }],
+        content: [{ type: 'text', text: out }],
+      };
+    },
+  );
+
+  // 12. taste_record_micro_skill — capture or corroborate operational repository facts
+  server.registerTool(
+    'taste_record_micro_skill',
+    {
+      title: 'Record or Corroborate Repo Micro-Skill',
+      description:
+        'Store a compact repository operational fact (test command, build flag, env setup). Repeated corroborations (>=2) promote it to verified for turn-1 token savings.',
+      inputSchema: {
+        category: z.enum(['test', 'build', 'lint', 'env', 'db', 'deploy', 'pattern']),
+        triggerPattern: z.string().min(3),
+        factText: z.string().min(5),
+        scope: z.enum(['project', 'global', 'remote']).optional().default('project'),
+        estimatedTokensSaved: z.number().min(50).max(2000).optional().default(240),
+        agentName: z.string().optional().default('MCP Coding Agent'),
+      },
+    },
+    async ({ category, triggerPattern, factText, scope, estimatedTokensSaved, agentName }) => {
+      recordAgentTouch(db, agentName, transportKind);
+      const result = upsertOrCorroborateMicroSkill(db, {
+        category,
+        triggerPattern,
+        factText,
+        scope,
+        estimatedTokensSaved,
+      });
+      const out = JSON.stringify(result, null, 2);
+      recordToolUsage(db, 'taste_record_micro_skill', estimateTokens(out));
+      return {
+        content: [{ type: 'text', text: out }],
+      };
+    },
+  );
+
+  // 13. taste_list_micro_skills — query verified/candidate repo micro-skills
+  server.registerTool(
+    'taste_list_micro_skills',
+    {
+      title: 'List Repository Micro-Skills',
+      description: 'Inspect verified, candidate, or retired repository operational facts stored in SQLite.',
+      inputSchema: {
+        scope: z.enum(['all', 'project', 'global', 'remote']).optional().default('all'),
+        status: z.enum(['all', 'verified', 'candidate', 'retired']).optional().default('all'),
+        category: z.string().optional().default('all'),
+      },
+    },
+    async ({ scope, status, category }) => {
+      const microSkills = listMicroSkills(db, { scope, status, category });
+      const out = JSON.stringify({ count: microSkills.length, microSkills }, null, 2);
+      recordToolUsage(db, 'taste_list_micro_skills', estimateTokens(out));
+      return {
+        content: [{ type: 'text', text: out }],
+      };
+    },
+  );
+
+  // 14. taste_get_economics — inspect token savings, failure loops prevented, and MCP tool pruning tips
+  server.registerTool(
+    'taste_get_economics',
+    {
+      title: 'Get Token Economics & Tool Pruning Report',
+      description:
+        'Retrieve TokenEconomizer metrics: total tokens saved, context compression ratio, failure loops prevented, verified micro-skills, and unused MCP tools recommended for pruning.',
+      inputSchema: {},
+    },
+    async () => {
+      const summary = getEconomicsSummary(db);
+      const out = JSON.stringify(summary, null, 2);
+      recordToolUsage(db, 'taste_get_economics', estimateTokens(out));
+      return {
+        content: [{ type: 'text', text: out }],
+      };
+    },
+  );
+
+  // 15. taste_manage_learning — edit, archive, or restore existing learnings directly from any agent
+  server.registerTool(
+    'taste_manage_learning',
+    {
+      title: 'Manage Taste Learning Lifecycle',
+      description: 'Edit rule text/rationale/category, archive an obsolete preference, or restore an archived learning.',
+      inputSchema: {
+        learningId: z.string(),
+        action: z.enum(['edit', 'archive', 'restore']),
+        ruleText: z.string().optional(),
+        rationale: z.string().optional(),
+        category: z.enum(TASTE_CATEGORIES).optional(),
+        hardDelete: z.boolean().optional().default(false),
+      },
+    },
+    async ({ learningId, action, ruleText, rationale, category, hardDelete }) => {
+      let result: unknown;
+      if (action === 'edit') {
+        result = editLearning(db, learningId, {
+          ruleText,
+          rationale,
+          category: category as TasteCategory | undefined,
+        });
+      } else if (action === 'archive') {
+        result = archiveOrDeleteLearning(db, learningId, hardDelete);
+      } else {
+        result = restoreLearning(db, learningId);
+      }
+      const out = JSON.stringify(result, null, 2);
+      recordToolUsage(db, 'taste_manage_learning', estimateTokens(out));
+      return {
+        content: [{ type: 'text', text: out }],
+      };
+    },
+  );
+
+  // 16. taste_manage_micro_skill — corroborate or retire a repository micro-skill by ID
+  server.registerTool(
+    'taste_manage_micro_skill',
+    {
+      title: 'Manage Repository Micro-Skill Lifecycle',
+      description: 'Corroborate a candidate micro-skill (promotes to verified at x2) or retire a stale micro-skill.',
+      inputSchema: {
+        microSkillId: z.string(),
+        action: z.enum(['corroborate', 'retire']),
+      },
+    },
+    async ({ microSkillId, action }) => {
+      const result =
+        action === 'corroborate'
+          ? { microSkill: corroborateMicroSkillById(db, microSkillId) }
+          : retireMicroSkill(db, microSkillId);
+      const out = JSON.stringify(result, null, 2);
+      recordToolUsage(db, 'taste_manage_micro_skill', estimateTokens(out));
+      return {
+        content: [{ type: 'text', text: out }],
       };
     },
   );
