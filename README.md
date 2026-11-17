@@ -1,4 +1,5 @@
 # TasteCaliber
+<img width="120" height="42" alt="image" src="https://github.com/user-attachments/assets/87587036-431b-4c95-8e86-cb1a55261467" />
 
 **TasteCaliber** is a universal Model Context Protocol (MCP) server and developer workbench powered by the **`taste-1` Meta Neuro-Symbolic engine**. It observes how you write, accept, reject, and edit code across AI coding agents (Claude Code, Cursor, Windsurf, Cline, Zed), builds a calibrated profile of your coding preferences in **local SQLite**, and injects those preferences back into every coding turn.
 
