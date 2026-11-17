@@ -48,9 +48,8 @@ Using a generative LLM to directly judge coding preferences causes four failure 
 
 `taste-1` returns **typed decisions and calibrated probabilities** (`src/engine/taste1.ts`):
 - **Deterministic**: Identical input signals always yield identical category and salience decisions.
-- **Fixed Symbolic Taxonomy**: Learnings map strictly to 11 canonical categories:
-  `typescript`, `architecture`, `cli`, `react`, `testing`, `database`, `error-handling`, `formatting`, `security`, `api`, `performance`.
-- **Contradiction Protection**: Evaluates incoming rules against symbolic conflict axes (e.g., `use semicolons` vs `omit semicolons`, `tabs` vs `spaces`, `async/await` vs `.then()`, `named exports` vs `default exports`, `avoid any` vs `allow any`). Conflicts are flagged (`status = 'conflicted'`) until explicitly resolved.
+- **Extensible Symbolic Taxonomy (`TASTE_CATEGORIES` + `domain_packs`)**: Ships with 11 canonical software categories (`typescript`, `architecture`, `cli`, `react`, `testing`, `database`, `error-handling`, `formatting`, `security`, `api`, `performance`), 5 universal daily-agent packs (`python`, `devops`, `writing`, `workflow`, `data`), plus custom workspace domain slugs registered dynamically via `taste_register_domain` (keywords, file extensions, and custom conflict axes) alongside auto-extracted `tags`.
+- **Contradiction Protection**: Evaluates incoming rules against coding and universal behavioral symbolic conflict axes (`use semicolons` vs `omit semicolons`, `tabs` vs `spaces`, `async/await` vs `.then()`, `named exports` vs `default exports`, `avoid any` vs `allow any`, plus `verbosity`, `autonomy`, and `output-format`). Conflicts are flagged (`status = 'conflicted'`) until explicitly resolved.
 
 ---
 
@@ -78,15 +77,16 @@ TasteCaliber uses Node 22's built-in `node:sqlite` (`DatabaseSync`) with `PRAGMA
 | Table | Purpose |
 | --- | --- |
 | `packages` | Project, global, and remote taste packages with compiled `taste.md` content |
-| `learnings` | Individual calibrated rules, confidence, accept/reject counts, KL divergence, and `conflicts_with_id` |
+| `learnings` | Individual calibrated rules, extensible category slug, `tags` JSON array, confidence, accept/reject counts, KL divergence, and `conflicts_with_id` |
+| `domain_packs` | Built-in and custom domain definitions (`slug`, `label`, `keywords_json`, `file_extensions_json`, `conflict_axes_json`) |
 | `signals` | Raw agent events (`accept`, `reject`, `edit`, `diff`, `prompt`), Step 1 extraction JSON, Step 2 `taste-1` decision JSON |
 | `rl_episodes` | Audit log of every Meta-RL reward, KL penalty, objective score, and confidence delta |
 | `providers` | Configured Local / NVIDIA NIM / OpenRouter inference endpoints and active Step 1/3 roles |
 | `settings` | Project/user `tasteLearning` toggles and namespace preferences |
 | `agent_connections` | Connected MCP clients (`http` / `stdio`), call counts, and last seen timestamps |
-| `micro_skills` | Corroborated repository operational facts (`candidate`, `verified`, `retired`) for turn-1 token savings |
+| `micro_skills` | Corroborated operational facts (`candidate`, `verified`, `retired`) across any category slug for turn-1 token savings |
 | `economics_events` | Telemetry ledger of context pruning, micro-skill hits, and failure-loop preventions |
-| `tool_usage` | Invocation counts and average response token footprints per MCP tool for pruning advice |
+| `tool_usage` | Invocation counts and average response token footprints per MCP tool across all 18 tools for pruning advice |
 
 ### Disk Markdown Sync (`.tastecaliber/taste/`)
 

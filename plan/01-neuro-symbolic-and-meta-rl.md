@@ -9,9 +9,9 @@ Rather than relying on an uncalibrated black-box LLM prompt to store coding pref
 
 2. **Step 2 — Deterministic `taste-1` Neuro-Symbolic Classifier (`src/engine/taste1.ts`)**:
    - **Noise Filter**: Rejects non-preference chatter (`"looks good"`, `"thanks"`, `"ok"`) before polluting memory.
-   - **11-Category Taxonomy**: `typescript`, `architecture`, `cli`, `react`, `testing`, `database`, `error-handling`, `formatting`, `security`, `api`, `performance`. Weighted keyword + file-extension heuristics yield calibrated category probabilities.
+   - **Extensible Symbolic Taxonomy (`TASTE_CATEGORIES` + `domain_packs`)**: 11 canonical engineering categories (`typescript`, `architecture`, `cli`, `react`, `testing`, `database`, `error-handling`, `formatting`, `security`, `api`, `performance`) plus built-in universal daily-agent packs (`python`, `devops`, `writing`, `workflow`, `data`) and custom workspace slugs registered via `taste_register_domain` (with keywords, file extensions, and conflict axes), plus auto-extracted `tags`.
    - **Symbolic Polarity & Comparison-Safe Conflict Detection**:
-     - Strips comparative clauses (`over ...`, `instead of ...`, `rather than ...`, `versus ...`) prior to checking mutually exclusive style axes (e.g., `use semicolons` vs `omit semicolons`, `named exports` vs `default exports`, `tabs` vs `spaces`).
+     - Strips comparative clauses (`over ...`, `instead of ...`, `rather than ...`, `versus ...`) prior to checking mutually exclusive style & behavioral axes (e.g., `use semicolons` vs `omit semicolons`, `named exports` vs `default exports`, `tabs` vs `spaces`, plus universal behavioral axes: `verbosity`, `autonomy`, `output-format`).
      - Ensures `"Prefer named exports over default exports"` reinforces rather than falsely conflicts with `"Prefer named exports"`.
      - When a real contradiction occurs, flags the new rule as `conflicted` (`conflicts_with_id` pointing to the existing rule) rather than silently overwriting established preferences.
    - **Paraphrase Deduplication (Sorensen-Dice)**:
@@ -25,17 +25,18 @@ Each learning tracks `(confidence, rewardSum, acceptCount, rejectCount, klDiverg
 
 $$\text{Meta-NeuroSymbolic Objective}(\phi) = \mathbb{E}\left[ R_{NS}(x, y) - \beta_{NS} \log \frac{\pi_\phi(y \mid x)}{\pi_{SFT}(y \mid x)} \right] + \gamma_{NS} \mathbb{E}[\log \pi_\phi(x)]$$
 
-- **Hyperparameters**: `betaNS = 0.12`, `gammaNS = 0.05`, `learningRate = 0.18`.
+- **Hyperparameters**: `betaNS = 0.18`, `gammaNS = 0.08`, `learningRate = 0.22`, `hintThreshold = 0.40`, `noiseThreshold = 0.32`.
 - **KL Divergence Regularizer**: Prevents a single noisy `reject` signal from collapsing an established high-evidence rule to zero, while still allowing steady decay if rejections persist.
 - **Status Lifecycle**:
   - `enforced`: `confidence >= 0.72` (injected as strict mandates)
-  - `hint`: `0.48 <= confidence < 0.72` (injected as soft suggestions)
+  - `hint`: `0.40 <= confidence < 0.72` (injected as soft suggestions)
   - `conflicted`: Symbolic axis clash detected; awaits explicit resolution (`keep_existing`, `accept_new`, `keep_both`)
-  - `archived`: `confidence < 0.30` or explicitly retired/rejected
+  - `archived`: `confidence < 0.32` or explicitly retired/rejected
 
 ---
 
-## 3. Step 3 & Step 4 — Deterministic Markdown & Atomic SQLite Sync
+## 3. Step 3 & Step 4 — Deterministic Markdown, Patch Verification & Atomic SQLite Sync
 - Compiles rules grouped by category into `.tastecaliber/taste/taste.md` and `.tastecaliber/taste/<category>/taste.md`.
-- Validates output with `lintTasteMarkdown()` (checking required headers, valid `[confidence: x.xx]` bounds in `[0, 1]`, valid status labels, and UTF-8 safety).
+- Validates output with `lintTasteMarkdown()` (checking required headers, valid `[confidence: x.xx]` bounds in `[0, 1]`, valid status labels, arbitrary valid lowercase category headings, and UTF-8 safety).
+- `verifyPatchAgainstTaste()` runs pre-flight compliance checks against active `enforced`/`hint` rules and `verified` micro-skills before agents finalize edits.
 - Runs SQLite in `WAL` mode (`busy_timeout = 5000`, `foreign_keys = ON`) so concurrent HTTP and Stdio agents share consistent state without SQLITE_BUSY locks.

@@ -8,6 +8,7 @@ import {
   findSimilarLearning,
   lintTasteMarkdown,
   updateMetaRL,
+  verifyPatchAgainstTaste,
 } from './taste1.ts';
 import type { TasteLearning } from './types.ts';
 
@@ -206,6 +207,7 @@ test('comparative "Prefer A over B" rules do not trigger false-positive conflict
 });
 
 import {
+  buildPrunedAllowlistConfig,
   detectFailureLoop,
   recommendUnusedTools,
   selectBudgetedLearnings,
@@ -358,5 +360,140 @@ test('detectFailureLoop clears streak when a more recent accept signal exists on
   assert.equal(guard.loopDetected, false);
   assert.equal(guard.repeatCount, 1);
 });
+
+test('custom DomainPack and universal behavioral conflict axes work beyond TypeScript', () => {
+  const rustPack = {
+    id: 'dom-rust',
+    slug: 'rust',
+    label: 'Rust Systems',
+    description: 'Rust conventions',
+    keywords: ['cargo', 'clippy', 'unwrap'],
+    fileExtensions: ['.rs'],
+    isBuiltin: false,
+    createdAt: '2026-11-17T00:00:00Z',
+    updatedAt: '2026-11-17T00:00:00Z',
+  };
+
+  const ext = deterministicExtractSignal({
+    rawInput: 'Avoid unwrap() in Rust handlers and prefer explicit Result error propagation',
+    filePath: 'src/main.rs',
+    signalType: 'edit',
+  });
+  const rustDecision = classifyWithTaste1({
+    extracted: ext,
+    signalType: 'edit',
+    filePath: 'src/main.rs',
+    existingLearnings: [],
+    customDomains: [rustPack],
+  });
+  assert.equal(rustDecision.category, 'rust');
+  assert.equal(rustDecision.symbolicChecks.validCategory, true);
+
+  const existingConcise = makeLearning({
+    id: 'lrn-writing-concise',
+    category: 'writing',
+    ruleKey: 'concise-bullet-points',
+    ruleText: 'Always write concise bullet points for status summaries',
+    status: 'enforced',
+  });
+  const verboseExt = deterministicExtractSignal({
+    rawInput: 'Write detailed narrative prose summaries without bullets',
+    filePath: 'docs/weekly.md',
+    signalType: 'prompt',
+  });
+  const conflictDecision = classifyWithTaste1({
+    extracted: verboseExt,
+    signalType: 'prompt',
+    filePath: 'docs/weekly.md',
+    existingLearnings: [existingConcise],
+  });
+  assert.equal(conflictDecision.contradictsId, 'lrn-writing-concise');
+  assert.equal(conflictDecision.recommendedStatus, 'conflicted');
+});
+
+test('selectBudgetedLearnings ranks verified micro-skills by taskQuery & filePath relevance', () => {
+  const budgeted = selectBudgetedLearnings({
+    learnings: [makeLearning()],
+    microSkills: [
+      {
+        id: 'ms-db-high',
+        scope: 'project',
+        category: 'db',
+        triggerPattern: 'running database migrations',
+        factText: 'Apply WAL pragma before migration',
+        corroborations: 8,
+        status: 'verified',
+        estimatedTokensSaved: 300,
+        lastUsedAt: null,
+        createdAt: '2026-11-17T00:00:00Z',
+        updatedAt: '2026-11-17T00:00:00Z',
+      },
+      {
+        id: 'ms-py-test',
+        scope: 'project',
+        category: 'python',
+        triggerPattern: 'running pytest suite',
+        factText: 'Run uv run pytest -q for fast Python verification',
+        corroborations: 2,
+        status: 'verified',
+        estimatedTokensSaved: 320,
+        lastUsedAt: null,
+        createdAt: '2026-11-17T00:00:00Z',
+        updatedAt: '2026-11-17T00:00:00Z',
+      },
+    ],
+    filePath: 'tests/test_api.py',
+    taskQuery: 'run pytest verification',
+    maxTokens: 200,
+    compact: true,
+    includeMicroSkills: true,
+  });
+
+  assert.equal(budgeted.injectedMicroSkills[0].id, 'ms-py-test');
+});
+
+test('verifyPatchAgainstTaste detects enforced rule violations before writing edits', () => {
+  const rules = [
+    makeLearning({
+      id: 'lrn-no-any',
+      category: 'typescript',
+      ruleText: 'Avoid explicit any in TypeScript; use unknown instead',
+      status: 'enforced',
+    }),
+    makeLearning({
+      id: 'lrn-named',
+      category: 'architecture',
+      ruleText: 'Prefer named exports over default exports',
+      status: 'enforced',
+    }),
+  ];
+
+  const badReport = verifyPatchAgainstTaste({
+    code: 'export default function handler(input: any) { return input; }',
+    filePath: 'server/handler.ts',
+    learnings: rules,
+  });
+
+  assert.equal(badReport.compliant, false);
+  assert.equal(badReport.violations.length, 2);
+
+  const goodReport = verifyPatchAgainstTaste({
+    code: 'export function handler(input: unknown) { return input; }',
+    filePath: 'server/handler.ts',
+    learnings: rules,
+  });
+  assert.equal(goodReport.compliant, true);
+  assert.equal(goodReport.violations.length, 0);
+});
+
+test('buildPrunedAllowlistConfig formats disabled tools map for unused MCP tools', () => {
+  const recs = recommendUnusedTools(['taste_get_context', 'taste_lint'], []);
+  const snippet = buildPrunedAllowlistConfig(recs);
+  assert.deepEqual(snippet, {
+    tastecaliber_taste_get_context: false,
+    tastecaliber_taste_lint: false,
+  });
+});
+
 
 

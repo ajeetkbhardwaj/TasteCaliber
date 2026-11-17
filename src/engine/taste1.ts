@@ -1,10 +1,14 @@
 import { TASTE_CATEGORIES } from './types.ts';
 import type {
   CategoryScore,
+  DomainPack,
   ExtractedSignal,
   LearningStatus,
   LintFileResult,
   LintIssue,
+  MicroSkill,
+  PatchVerificationResult,
+  PatchViolation,
   SignalType,
   Taste1Decision,
   TasteCategory,
@@ -25,6 +29,7 @@ interface CategoryLexicon {
   category: TasteCategory;
   keywords: string[];
   structuralPatterns: RegExp[];
+  fileExtensions?: string[];
 }
 
 const CATEGORY_LEXICONS: CategoryLexicon[] = [
@@ -229,6 +234,102 @@ const CATEGORY_LEXICONS: CategoryLexicon[] = [
     ],
     structuralPatterns: [/\bnew\s+Map\(/, /\bnew\s+Set\(/],
   },
+  {
+    category: 'python',
+    keywords: [
+      'python',
+      'pytest',
+      'pydantic',
+      'fastapi',
+      'django',
+      'ruff',
+      'mypy',
+      'pyproject',
+      'uv',
+      'venv',
+      'pip',
+      'dataclass',
+      'type hint',
+    ],
+    structuralPatterns: [/\bdef\s+\w+\(/, /\bfrom\s+\w+\s+import\b/, /\bpytest\b/],
+    fileExtensions: ['.py', '.pyi'],
+  },
+  {
+    category: 'devops',
+    keywords: [
+      'docker',
+      'dockerfile',
+      'kubernetes',
+      'k8s',
+      'terraform',
+      'helm',
+      'deploy',
+      'container',
+      'ci/cd',
+      'github actions',
+      'wrangler',
+      'nginx',
+      'healthcheck',
+    ],
+    structuralPatterns: [/\bFROM\s+\w+/, /\bRUN\s+/, /\bresource\s+"[\w-]+"/],
+    fileExtensions: ['.tf', '.yml', '.yaml', 'dockerfile'],
+  },
+  {
+    category: 'writing',
+    keywords: [
+      'markdown',
+      'readme',
+      'documentation',
+      'docs',
+      'summary',
+      'bullet',
+      'concise',
+      'prose',
+      'tone',
+      'email',
+      'heading',
+      'changelog',
+      'executive',
+    ],
+    structuralPatterns: [/^#{1,3}\s+/m],
+    fileExtensions: ['.md', '.mdx', '.txt'],
+  },
+  {
+    category: 'workflow',
+    keywords: [
+      'git',
+      'commit',
+      'branch',
+      'pull request',
+      'pr',
+      'jira',
+      'linear',
+      'confirm',
+      'autonomous',
+      'checklist',
+      'review',
+      'triage',
+    ],
+    structuralPatterns: [],
+  },
+  {
+    category: 'data',
+    keywords: [
+      'pandas',
+      'dataframe',
+      'parquet',
+      'dbt',
+      'warehouse',
+      'bigquery',
+      'snowflake',
+      'etl',
+      'analytics',
+      'csv',
+      'notebook',
+    ],
+    structuralPatterns: [/\bpd\.DataFrame\b/, /\bGROUP\s+BY\b/i],
+    fileExtensions: ['.ipynb', '.csv', '.parquet'],
+  },
 ];
 
 // Symbolic antonym / contradiction pairs for deterministic conflict detection
@@ -279,6 +380,21 @@ const CONFLICT_AXES: ConflictAxis[] = [
     sideA: /\b(prefer|use)\b.*\bundefined\b/i,
     sideB: /\b(prefer|use)\b.*\bnull\b/i,
   },
+  {
+    axis: 'verbosity',
+    sideA: /\b(concise|brief|terse|short|bullet\s+points?|bullet-first)\b/i,
+    sideB: /\b(detailed|verbose|comprehensive|long-form|narrative\s+prose)\b/i,
+  },
+  {
+    axis: 'autonomy',
+    sideA: /\b(ask\s+(before|confirmation)|require\s+approval|confirm\s+before)\b/i,
+    sideB: /\b(autonomous|without\s+asking|auto-run|never\s+ask\s+confirmation)\b/i,
+  },
+  {
+    axis: 'output-format',
+    sideA: /\b(structured\s+json|json\s+only|markdown\s+tables?)\b/i,
+    sideB: /\b(plain\s+text|prose\s+only|avoid\s+tables)\b/i,
+  },
 ];
 
 function clamp(val: number, min: number, max: number): number {
@@ -287,6 +403,66 @@ function clamp(val: number, min: number, max: number): number {
 
 function round4(val: number): number {
   return Math.round(val * 10000) / 10000;
+}
+
+export function normalizeCategorySlug(raw: string): string {
+  const slug = raw
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return slug || 'general';
+}
+
+export function extractTagsFromRule(
+  ruleText: string,
+  filePath?: string | null,
+  category?: string,
+): string[] {
+  const tags = new Set<string>();
+  if (category) tags.add(normalizeCategorySlug(category));
+
+  if (filePath) {
+    const extMatch = filePath.toLowerCase().match(/\.([a-z0-9]+)$/);
+    if (extMatch) tags.add(extMatch[1]);
+  }
+
+  const normalized = ruleText
+    .toLowerCase()
+    .replace(/[^a-z0-9-\s]/g, ' ')
+    .split(/\s+/)
+    .filter(
+      (w) =>
+        w.length >= 3 &&
+        ![
+          'the',
+          'and',
+          'for',
+          'with',
+          'that',
+          'this',
+          'from',
+          'into',
+          'over',
+          'instead',
+          'always',
+          'never',
+          'prefer',
+          'avoid',
+          'use',
+          'using',
+          'keep',
+          'make',
+          'files',
+          'code',
+        ].includes(w),
+    );
+
+  for (const w of normalized.slice(0, 5)) {
+    tags.add(w);
+  }
+  return Array.from(tags).slice(0, 7);
 }
 
 export function normalizeRuleKey(text: string): string {
@@ -448,8 +624,10 @@ export function classifyWithTaste1(params: {
   diffBefore?: string | null;
   diffAfter?: string | null;
   existingLearnings: TasteLearning[];
+  customDomains?: DomainPack[];
+  preferredCategory?: string | null;
 }): Taste1Decision {
-  const { extracted, signalType, filePath, diffBefore, diffAfter, existingLearnings } = params;
+  const { extracted, signalType, filePath, diffBefore, diffAfter, existingLearnings, customDomains, preferredCategory } = params;
   const corpus = [
     extracted.candidateRule,
     extracted.rationale,
@@ -460,9 +638,9 @@ export function classifyWithTaste1(params: {
     .join(' ')
     .toLowerCase();
 
-  // 1. Neural Salience Scoring (detect noise vs actionable coding preference)
+  // 1. Neural Salience Scoring (detect noise vs actionable preference)
   const preferenceMarkers = [
-    /\b(prefer|always|never|avoid|use|enforce|keep|require|must|should|omit|split|parameterized|explicit|strict|named|early)\b/i,
+    /\b(prefer|always|never|avoid|use|enforce|keep|require|must|should|omit|split|parameterized|explicit|strict|named|early|concise|structured|confirm)\b/i,
     /\b(instead of|rather than|over|without)\b/i,
   ];
   const noiseMarkers = [
@@ -492,11 +670,30 @@ export function classifyWithTaste1(params: {
   }
   salience = round4(clamp(salience, 0.05, 0.96));
 
-  // 2. Category Classification over Fixed Symbolic Taxonomy
-  const rawScores: CategoryScore[] = CATEGORY_LEXICONS.map((lex) => {
+  // 2. Category Classification over Extensible Symbolic + Custom Domain Taxonomy
+  const mergedLexicons: CategoryLexicon[] = [...CATEGORY_LEXICONS];
+  for (const pack of customDomains ?? []) {
+    const slug = normalizeCategorySlug(pack.slug);
+    const existing = mergedLexicons.find((l) => l.category === slug);
+    if (existing) {
+      existing.keywords = Array.from(new Set([...existing.keywords, ...pack.keywords.map((k) => k.toLowerCase())]));
+      existing.fileExtensions = Array.from(
+        new Set([...(existing.fileExtensions ?? []), ...pack.fileExtensions.map((e) => e.toLowerCase())]),
+      );
+    } else {
+      mergedLexicons.push({
+        category: slug,
+        keywords: pack.keywords.map((k) => k.toLowerCase()),
+        structuralPatterns: [],
+        fileExtensions: pack.fileExtensions.map((e) => e.toLowerCase()),
+      });
+    }
+  }
+
+  const rawScores: CategoryScore[] = mergedLexicons.map((lex) => {
     let score = 0.05;
     for (const kw of lex.keywords) {
-      if (corpus.includes(kw)) {
+      if (kw && corpus.includes(kw)) {
         score += kw.includes(' ') ? 0.26 : 0.18;
       }
     }
@@ -506,12 +703,16 @@ export function classifyWithTaste1(params: {
       }
     }
     if (filePath) {
-      if (lex.category === 'react' && /\.(tsx|jsx)$/i.test(filePath)) score += 0.25;
-      if (lex.category === 'typescript' && /\.(ts|tsx)$/i.test(filePath)) score += 0.18;
-      if (lex.category === 'testing' && /\.(test|spec)\./i.test(filePath)) score += 0.32;
-      if (lex.category === 'database' && /(db|sqlite|sql|schema|migration)/i.test(filePath)) score += 0.28;
-      if (lex.category === 'cli' && /(cli|bin|stdio|cmd)/i.test(filePath)) score += 0.28;
-      if (lex.category === 'api' && /(server|api|route|mcp)/i.test(filePath)) score += 0.22;
+      const fp = filePath.toLowerCase();
+      if (lex.category === 'react' && /\.(tsx|jsx)$/i.test(fp)) score += 0.25;
+      if (lex.category === 'typescript' && /\.(ts|tsx)$/i.test(fp)) score += 0.18;
+      if (lex.category === 'testing' && /\.(test|spec)\./i.test(fp)) score += 0.32;
+      if (lex.category === 'database' && /(db|sqlite|sql|schema|migration)/i.test(fp)) score += 0.28;
+      if (lex.category === 'cli' && /(cli|bin|stdio|cmd)/i.test(fp)) score += 0.28;
+      if (lex.category === 'api' && /(server|api|route|mcp)/i.test(fp)) score += 0.22;
+      if (lex.fileExtensions?.some((ext) => ext && (fp.endsWith(ext) || fp.includes(ext)))) {
+        score += 0.28;
+      }
     }
     return { category: lex.category, score };
   });
@@ -525,7 +726,8 @@ export function classifyWithTaste1(params: {
     .sort((a, b) => b.score - a.score || a.category.localeCompare(b.category))
     .slice(0, 4);
 
-  const chosenCategory = topCategories[0].category;
+  const normalizedPreferred = preferredCategory?.trim() ? normalizeCategorySlug(preferredCategory) : null;
+  const chosenCategory = normalizedPreferred || topCategories[0].category;
   const isPreference = salience >= META_RL_CONFIG.noiseThreshold && extracted.candidateRule.trim().length >= 8;
 
   // Polarity detection
@@ -622,7 +824,7 @@ export function classifyWithTaste1(params: {
     contradictsId,
     contradictionReason,
     symbolicChecks: {
-      validCategory: TASTE_CATEGORIES.includes(chosenCategory),
+      validCategory: /^[a-z0-9][a-z0-9-]{0,40}$/.test(chosenCategory) || TASTE_CATEGORIES.includes(chosenCategory as (typeof TASTE_CATEGORIES)[number]),
       hasActionableRule: extracted.candidateRule.trim().length >= 8,
       noConflictOverwrite: contradictsId === null,
     },
@@ -785,12 +987,12 @@ export function lintTasteMarkdown(file: string, content: string): LintFileResult
     if (/^##\s+(.+)/.test(line)) {
       hasSectionH2 = true;
       const cat = line.replace(/^##\s+/, '').trim().toLowerCase();
-      if (cat !== 'general' && !TASTE_CATEGORIES.includes(cat as TasteCategory)) {
+      if (cat !== 'general' && !/^[a-z0-9][a-z0-9-]{0,40}$/.test(cat)) {
         issues.push({
           file,
           line: lineNum,
           severity: 'warning',
-          message: `Non-canonical category "${cat}" outside taste-1 symbolic taxonomy`,
+          message: `Category heading "${cat}" should use lowercase slug format (a-z, 0-9, hyphens)`,
         });
       }
     }
@@ -843,5 +1045,157 @@ export function lintTasteMarkdown(file: string, content: string): LintFileResult
     errors,
     warnings,
     issues,
+  };
+}
+
+/**
+ * Deterministic pre-flight patch/snippet verifier for coding and daily-task agents.
+ * Checks proposed code, diff, or drafted text against active enforced & hint rules.
+ */
+export function verifyPatchAgainstTaste(params: {
+  code: string;
+  filePath?: string | null;
+  taskQuery?: string;
+  learnings: TasteLearning[];
+  microSkills?: MicroSkill[];
+}): PatchVerificationResult {
+  const snippet = params.code ?? '';
+  const active = params.learnings.filter((l) => l.status === 'enforced' || l.status === 'hint');
+  const violations: PatchViolation[] = [];
+  const warnings: PatchViolation[] = [];
+
+  const pushFinding = (learning: TasteLearning, reason: string) => {
+    const entry: PatchViolation = {
+      severity: learning.status === 'enforced' ? 'error' : 'warning',
+      learningId: learning.id,
+      category: learning.category,
+      ruleText: learning.ruleText,
+      confidence: learning.confidence,
+      reason,
+    };
+    if (entry.severity === 'error') violations.push(entry);
+    else warnings.push(entry);
+  };
+
+  for (const rule of active) {
+    const rt = rule.ruleText.toLowerCase();
+
+    // 1. Explicit `any` check in TS
+    if (/\b(avoid|forbid|ban|no)\b.*\bany\b/.test(rt) && /(:\s*any\b|\bas\s+any\b|<any>)/.test(snippet)) {
+      pushFinding(rule, 'Found explicit `any` type annotation or cast in submitted snippet.');
+      continue;
+    }
+
+    // 2. Parameterized SQLite / SQL check
+    if (
+      /\b(parameterized|prepared)\b.*\b(sql|sqlite|quer)/.test(rt) &&
+      /`[^`]*\b(SELECT|INSERT|UPDATE|DELETE)\b[^`]*\$\{/i.test(snippet)
+    ) {
+      pushFinding(rule, 'Detected template-literal SQL string interpolation instead of parameterized prepared statement.');
+      continue;
+    }
+
+    // 3. Default vs named export check
+    if (/\bnamed\s+exports?\b/.test(rt) && /\bexport\s+default\b/.test(snippet)) {
+      pushFinding(rule, 'Detected `export default` where rule prefers named exports.');
+      continue;
+    }
+
+    // 4. async/await vs .then() check
+    if (/\basync\s*\/?\s*await\b/.test(rt) && /\.then\s*\(/.test(snippet)) {
+      pushFinding(rule, 'Detected `.then()` promise chain where rule prefers async/await.');
+      continue;
+    }
+
+    // 5. No console.log check
+    if (/\b(avoid|never|no|remove)\b.*\bconsole\.log\b/.test(rt) && /\bconsole\.log\s*\(/.test(snippet)) {
+      pushFinding(rule, 'Detected `console.log(...)` call violating production logging preference.');
+      continue;
+    }
+
+    // 6. Accessible native controls vs clickable div
+    if (/\bnative\s+button\b/.test(rt) && /<div[^>]*onClick=/i.test(snippet)) {
+      pushFinding(rule, 'Detected clickable `<div onClick=...>` instead of native `<button>`.');
+      continue;
+    }
+
+    // 7. Semicolons enforcement / omission
+    if (/\b(omit|no|avoid|never)\b.*\bsemicolon/.test(rt) && /;\s*$/m.test(snippet)) {
+      pushFinding(rule, 'Detected trailing semicolons while rule prefers omitting semicolons.');
+      continue;
+    }
+
+    // 8. Avoid `var`
+    if (/\b(avoid|never|no)\b.*\bvar\b/.test(rt) && /\bvar\s+\w+\s*=/.test(snippet)) {
+      pushFinding(rule, 'Detected `var` declaration where `const`/`let` is preferred.');
+      continue;
+    }
+
+    // 9. Generic forbidden token/call for custom domains (e.g. "Avoid `unwrap()`", "Never call eval()")
+    const forbidMatch = rule.ruleText.match(
+      /\b(?:avoid|never|forbid|ban|do not use|no)\s+(?:calling\s+|using\s+)?`?([A-Za-z_][A-Za-z0-9_.:-]{2,}(?:\(\))?)`?/i,
+    );
+    if (forbidMatch?.[1]) {
+      const rawToken = forbidMatch[1];
+      const normalized = rawToken.toLowerCase();
+      const genericWords = new Set(['using', 'calling', 'leaving', 'writing', 'default', 'explicit', 'implicit', 'nested', 'global', 'local', 'static', 'dynamic', 'mutable', 'sync', 'async', 'production', 'handlers']);
+      const looksCodeLike =
+        rule.ruleText.includes(`\`${rawToken}\``) ||
+        rawToken.endsWith('()') ||
+        rawToken.includes('.') ||
+        rawToken.includes('_');
+      if (looksCodeLike && !genericWords.has(normalized)) {
+        const escaped = rawToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = rawToken.endsWith('()')
+          ? new RegExp(`\\b${rawToken.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`, 'i')
+          : new RegExp(`\\b${escaped}\\b`, 'i');
+        if (re.test(snippet)) {
+          pushFinding(rule, `Detected forbidden pattern \`${rawToken}\` matching rule "${rule.ruleText}".`);
+          continue;
+        }
+      }
+    }
+  }
+
+  const fpLower = (params.filePath ?? '').toLowerCase();
+  const queryTerms = `${params.taskQuery ?? ''} ${params.filePath ?? ''} ${snippet.slice(0, 300)}`
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3);
+
+  const relevantMicroSkills = (params.microSkills ?? [])
+    .filter((m) => m.status === 'verified')
+    .map((m) => {
+      const hay = `${m.category} ${m.triggerPattern} ${m.factText}`.toLowerCase();
+      let hits = 0;
+      for (const term of queryTerms) {
+        if (hay.includes(term)) hits++;
+      }
+      if (fpLower && (fpLower.includes(m.category) || hay.includes(fpLower))) hits += 2;
+      return { ms: m, hits };
+    })
+    .filter((x) => x.hits > 0)
+    .sort((a, b) => b.hits - a.hits || b.ms.corroborations - a.ms.corroborations)
+    .slice(0, 3)
+    .map((x) => ({
+      id: x.ms.id,
+      category: x.ms.category,
+      triggerPattern: x.ms.triggerPattern,
+      factText: x.ms.factText,
+    }));
+
+  const compliant = violations.length === 0;
+  const summary = compliant
+    ? `Compliant across ${active.length} active rules (${warnings.length} advisory hint warning(s)).`
+    : `Detected ${violations.length} enforced violation(s) and ${warnings.length} hint warning(s) across ${active.length} active rules.`;
+
+  return {
+    compliant,
+    checkedRulesCount: active.length,
+    violations,
+    warnings,
+    relevantMicroSkills,
+    summary,
   };
 }

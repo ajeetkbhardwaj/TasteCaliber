@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
+  DomainPack,
   EconomicsEvent,
   EconomicsEventType,
   EconomicsSummary,
@@ -20,8 +21,8 @@ import type {
   TasteSignalRecord,
   ToolUsageStat,
 } from '../src/engine/types.ts';
-import { recommendUnusedTools } from '../src/engine/economics.ts';
-import { compileTasteMarkdown, lintTasteMarkdown } from '../src/engine/taste1.ts';
+import { buildPrunedAllowlistConfig, recommendUnusedTools } from '../src/engine/economics.ts';
+import { compileTasteMarkdown, lintTasteMarkdown, normalizeCategorySlug } from '../src/engine/taste1.ts';
 
 export const ALL_MCP_TOOL_NAMES = [
   'taste_get_context',
@@ -40,6 +41,8 @@ export const ALL_MCP_TOOL_NAMES = [
   'taste_get_economics',
   'taste_manage_learning',
   'taste_manage_micro_skill',
+  'taste_verify_patch',
+  'taste_register_domain',
 ];
 
 const DEFAULT_DB_PATH = process.env.TASTE_DB_PATH || path.resolve(process.cwd(), 'data', 'taste.db');
@@ -99,6 +102,7 @@ function initSchema(db: DatabaseSync): void {
       kl_divergence REAL NOT NULL DEFAULT 0,
       evidence_count INTEGER NOT NULL DEFAULT 1,
       conflicts_with_id TEXT,
+      tags TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -161,7 +165,7 @@ function initSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS micro_skills (
       id TEXT PRIMARY KEY,
       scope TEXT NOT NULL CHECK (scope IN ('project', 'global', 'remote')),
-      category TEXT NOT NULL CHECK (category IN ('test', 'build', 'lint', 'env', 'db', 'deploy', 'pattern')),
+      category TEXT NOT NULL,
       trigger_pattern TEXT NOT NULL,
       fact_text TEXT NOT NULL,
       corroborations INTEGER NOT NULL DEFAULT 1,
@@ -191,6 +195,18 @@ function initSchema(db: DatabaseSync): void {
       last_called_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS domain_packs (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      label TEXT NOT NULL,
+      description TEXT NOT NULL,
+      keywords_json TEXT NOT NULL DEFAULT '[]',
+      file_extensions_json TEXT NOT NULL DEFAULT '[]',
+      is_builtin INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_learnings_scope_cat_status ON learnings(scope, category, status);
     CREATE INDEX IF NOT EXISTS idx_learnings_rule_key ON learnings(rule_key);
     CREATE INDEX IF NOT EXISTS idx_rl_episodes_learning ON rl_episodes(learning_id, created_at DESC);
@@ -198,6 +214,42 @@ function initSchema(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_micro_skills_status ON micro_skills(status, corroborations DESC);
     CREATE INDEX IF NOT EXISTS idx_economics_created ON economics_events(created_at DESC);
   `);
+
+  // Safe migration for existing SQLite databases created before `tags` column
+  const cols = db.prepare(`PRAGMA table_info(learnings)`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'tags')) {
+    db.exec(`ALTER TABLE learnings ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';`);
+  }
+
+  // Safe migration if existing DB has closed CHECK constraint on micro_skills.category
+  const msMeta = db
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'micro_skills'`)
+    .get() as { sql?: string } | undefined;
+  if (msMeta?.sql && /CHECK\s*\(\s*category\s+IN/i.test(msMeta.sql)) {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN;
+      CREATE TABLE micro_skills_open (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL CHECK (scope IN ('project', 'global', 'remote')),
+        category TEXT NOT NULL,
+        trigger_pattern TEXT NOT NULL,
+        fact_text TEXT NOT NULL,
+        corroborations INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL CHECK (status IN ('candidate', 'verified', 'retired')),
+        estimated_tokens_saved INTEGER NOT NULL DEFAULT 220,
+        last_used_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO micro_skills_open SELECT * FROM micro_skills;
+      DROP TABLE micro_skills;
+      ALTER TABLE micro_skills_open RENAME TO micro_skills;
+      CREATE INDEX IF NOT EXISTS idx_micro_skills_status ON micro_skills(status, corroborations DESC);
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+  }
 }
 
 function seedIfEmpty(db: DatabaseSync): void {
@@ -740,9 +792,9 @@ export function listLearnings(
     params.push(filters.minConfidence);
   }
   if (filters?.search && filters.search.trim()) {
-    sql += ' AND (LOWER(rule_text) LIKE ? OR LOWER(rationale) LIKE ? OR LOWER(category) LIKE ?)';
+    sql += ' AND (LOWER(rule_text) LIKE ? OR LOWER(rationale) LIKE ? OR LOWER(category) LIKE ? OR LOWER(tags) LIKE ?)';
     const q = `%${filters.search.trim().toLowerCase()}%`;
-    params.push(q, q, q);
+    params.push(q, q, q, q);
   }
 
   sql += ' ORDER BY confidence DESC, updated_at DESC';
@@ -754,6 +806,16 @@ export function listLearnings(
 export function getLearningById(db: DatabaseSync, id: string): TasteLearning | null {
   const row = db.prepare('SELECT * FROM learnings WHERE id = ?').get(id) as Record<string, unknown> | undefined;
   return row ? mapLearningRow(row) : null;
+}
+
+function parseJsonStringArray(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
+  } catch {
+    return [];
+  }
 }
 
 function mapLearningRow(r: Record<string, unknown>): TasteLearning {
@@ -773,6 +835,7 @@ function mapLearningRow(r: Record<string, unknown>): TasteLearning {
     klDivergence: Number(r.kl_divergence),
     evidenceCount: Number(r.evidence_count),
     conflictsWithId: r.conflicts_with_id ? String(r.conflicts_with_id) : null,
+    tags: parseJsonStringArray(r.tags),
     createdAt: String(r.created_at),
     updatedAt: String(r.updated_at),
   };
@@ -1004,6 +1067,25 @@ function seedEconomicsIfEmpty(db: DatabaseSync): void {
     insertTool.run('taste_record_signal', 8, 195, now);
     insertTool.run('taste_reinforce', 5, 110, earlier);
     insertTool.run('taste_lint', 3, 145, earlier);
+  }
+
+  const domainRow = db.prepare('SELECT COUNT(*) as cnt FROM domain_packs').get() as { cnt: number };
+  if (domainRow.cnt === 0) {
+    const insertDomain = db.prepare(`
+      INSERT INTO domain_packs (id, slug, label, description, keywords_json, file_extensions_json, is_builtin, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+    `);
+    const starters = [
+      ['dom-python', 'python', 'Python & ML', 'Python conventions, pytest, Pydantic, ruff, mypy, and uv/venv tooling', ['python', 'pytest', 'pydantic', 'fastapi', 'ruff', 'uv'], ['.py', '.pyi']],
+      ['dom-devops', 'devops', 'DevOps & Cloud', 'Docker, Kubernetes, Terraform, Wrangler, CI/CD, and deployment hygiene', ['docker', 'kubernetes', 'terraform', 'wrangler', 'ci/cd', 'deploy'], ['.tf', '.yml', '.yaml', 'dockerfile']],
+      ['dom-writing', 'writing', 'Docs & Communication', 'Markdown structure, READMEs, changelogs, emails, and concise executive summaries', ['markdown', 'readme', 'summary', 'bullet', 'concise', 'email', 'tone'], ['.md', '.mdx', '.txt']],
+      ['dom-workflow', 'workflow', 'Agent & Git Workflow', 'Commit formatting, PR reviews, confirmation gates, and daily task habits', ['git', 'commit', 'pull request', 'confirm', 'autonomous', 'checklist'], []],
+      ['dom-data', 'data', 'Data & Analytics', 'Dataframes, dbt, warehouses, notebooks, and ETL pipeline conventions', ['pandas', 'dataframe', 'dbt', 'warehouse', 'bigquery', 'etl'], ['.ipynb', '.csv', '.parquet']],
+    ] as const;
+
+    for (const [id, slug, label, desc, kws, exts] of starters) {
+      insertDomain.run(id, slug, label, desc, JSON.stringify(kws), JSON.stringify(exts), now, now);
+    }
   }
 }
 
@@ -1258,6 +1340,7 @@ export function getEconomicsSummary(db: DatabaseSync): EconomicsSummary {
 
   const toolUsage = listToolUsage(db);
   const unusedToolRecommendations = recommendUnusedTools(ALL_MCP_TOOL_NAMES, toolUsage);
+  const prunedAllowlistSnippet = buildPrunedAllowlistConfig(unusedToolRecommendations);
 
   return {
     totalTokensSaved,
@@ -1269,7 +1352,107 @@ export function getEconomicsSummary(db: DatabaseSync): EconomicsSummary {
     candidateMicroSkills: Number(msCounts.candidate_cnt || 0),
     toolUsage,
     unusedToolRecommendations,
+    prunedAllowlistSnippet,
     recentEvents,
+  };
+}
+
+export function listDomainPacks(db: DatabaseSync): DomainPack[] {
+  const rows = db.prepare('SELECT * FROM domain_packs ORDER BY is_builtin DESC, slug ASC').all() as Array<
+    Record<string, unknown>
+  >;
+  return rows.map((r) => ({
+    id: String(r.id),
+    slug: String(r.slug),
+    label: String(r.label),
+    description: String(r.description),
+    keywords: parseJsonStringArray(r.keywords_json),
+    fileExtensions: parseJsonStringArray(r.file_extensions_json),
+    isBuiltin: Boolean(r.is_builtin),
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+  }));
+}
+
+export function upsertDomainPack(
+  db: DatabaseSync,
+  input: {
+    slug: string;
+    label: string;
+    description?: string;
+    keywords?: string[];
+    fileExtensions?: string[];
+  },
+): { domainPack: DomainPack; created: boolean } {
+  const slug = normalizeCategorySlug(input.slug);
+  const now = new Date().toISOString();
+  const existing = db.prepare('SELECT * FROM domain_packs WHERE slug = ?').get(slug) as
+    | Record<string, unknown>
+    | undefined;
+
+  const nextKeywords = Array.from(new Set((input.keywords ?? []).map((k) => k.trim().toLowerCase()).filter(Boolean)));
+  const nextExts = Array.from(new Set((input.fileExtensions ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean)));
+
+  if (existing) {
+    const mergedKw = Array.from(new Set([...parseJsonStringArray(existing.keywords_json), ...nextKeywords]));
+    const mergedExt = Array.from(new Set([...parseJsonStringArray(existing.file_extensions_json), ...nextExts]));
+    db.prepare(
+      `UPDATE domain_packs
+       SET label = ?, description = ?, keywords_json = ?, file_extensions_json = ?, updated_at = ?
+       WHERE slug = ?`,
+    ).run(
+      input.label.trim() || String(existing.label),
+      input.description?.trim() || String(existing.description),
+      JSON.stringify(mergedKw),
+      JSON.stringify(mergedExt),
+      now,
+      slug,
+    );
+    const updated = db.prepare('SELECT * FROM domain_packs WHERE slug = ?').get(slug) as Record<string, unknown>;
+    return {
+      created: false,
+      domainPack: {
+        id: String(updated.id),
+        slug: String(updated.slug),
+        label: String(updated.label),
+        description: String(updated.description),
+        keywords: parseJsonStringArray(updated.keywords_json),
+        fileExtensions: parseJsonStringArray(updated.file_extensions_json),
+        isBuiltin: Boolean(updated.is_builtin),
+        createdAt: String(updated.created_at),
+        updatedAt: String(updated.updated_at),
+      },
+    };
+  }
+
+  const id = `dom-${slug}-${Date.now()}`;
+  db.prepare(
+    `INSERT INTO domain_packs (id, slug, label, description, keywords_json, file_extensions_json, is_builtin, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+  ).run(
+    id,
+    slug,
+    input.label.trim() || slug,
+    input.description?.trim() || `Custom domain pack for ${slug}`,
+    JSON.stringify(nextKeywords),
+    JSON.stringify(nextExts),
+    now,
+    now,
+  );
+  const created = db.prepare('SELECT * FROM domain_packs WHERE id = ?').get(id) as Record<string, unknown>;
+  return {
+    created: true,
+    domainPack: {
+      id: String(created.id),
+      slug: String(created.slug),
+      label: String(created.label),
+      description: String(created.description),
+      keywords: parseJsonStringArray(created.keywords_json),
+      fileExtensions: parseJsonStringArray(created.file_extensions_json),
+      isBuiltin: Boolean(created.is_builtin),
+      createdAt: String(created.created_at),
+      updatedAt: String(created.updated_at),
+    },
   };
 }
 

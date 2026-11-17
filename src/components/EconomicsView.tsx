@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { Check, Plus, Trash2 } from 'lucide-react';
-import { EconomicsSummary, MicroSkill, MicroSkillCategory, TasteScope } from '../engine/types';
+import {
+  CORE_MICRO_SKILL_CATEGORIES,
+  EconomicsSummary,
+  MicroSkill,
+  MicroSkillCategory,
+  TasteScope,
+} from '../engine/types';
 
 interface EconomicsViewProps {
   economics: EconomicsSummary;
@@ -8,7 +14,7 @@ interface EconomicsViewProps {
   onRefresh: () => Promise<void>;
 }
 
-const CATEGORIES: MicroSkillCategory[] = ['test', 'build', 'lint', 'env', 'db', 'deploy', 'pattern'];
+const CATEGORIES: readonly string[] = CORE_MICRO_SKILL_CATEGORIES;
 
 export function EconomicsView({ economics, microSkills, onRefresh }: EconomicsViewProps) {
   const [triggerPattern, setTriggerPattern] = useState('');
@@ -296,6 +302,15 @@ export function EconomicsView({ economics, microSkills, onRefresh }: EconomicsVi
                     </span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {economics.prunedAllowlistSnippet && Object.keys(economics.prunedAllowlistSnippet).length > 0 && (
+              <div className="pt-3 border-t border-slate-200 space-y-1.5">
+                <p className="text-xs font-semibold text-slate-700">Suggested Agent Config Pruning Snippet</p>
+                <pre className="p-2.5 bg-slate-950 text-slate-100 rounded text-[11px] font-mono overflow-x-auto max-h-36">
+                  {JSON.stringify({ tools: economics.prunedAllowlistSnippet }, null, 2)}
+                </pre>
               </div>
             )}
 

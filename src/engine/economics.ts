@@ -1,5 +1,6 @@
 import type {
   ContextBudgetResult,
+  DomainPack,
   LoopGuardResult,
   MicroSkill,
   SignalType,
@@ -18,7 +19,10 @@ export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-export function inferCategoriesFromFilePath(filePath?: string | null): TasteCategory[] {
+export function inferCategoriesFromFilePath(
+  filePath?: string | null,
+  customDomains?: DomainPack[],
+): TasteCategory[] {
   if (!filePath) return [];
   const p = filePath.toLowerCase();
   const matched = new Set<TasteCategory>();
@@ -43,14 +47,45 @@ export function inferCategoriesFromFilePath(filePath?: string | null): TasteCate
     matched.add('error-handling');
     matched.add('security');
   }
-  if (p.includes('cli') || p.includes('stdio') || p.includes('bin/')) {
+  if (p.includes('cli') || p.includes('stdio') || p.includes('bin/') || /\.(sh|bash|zsh)$/.test(p)) {
     matched.add('cli');
   }
   if (p.includes('perf') || p.includes('cache') || p.includes('worker')) {
     matched.add('performance');
   }
+  if (/\.(py|pyi)$/.test(p) || p.includes('pyproject')) {
+    matched.add('python');
+  }
+  if (/\.(tf|hcl|yml|yaml)$/.test(p) || p.includes('dockerfile') || p.includes('k8s') || p.includes('.github/workflows')) {
+    matched.add('devops');
+  }
+  if (/\.(md|mdx|txt|rst)$/.test(p) || p.includes('readme') || p.includes('docs/')) {
+    matched.add('writing');
+  }
+  if (/\.(ipynb|csv|parquet)$/.test(p)) {
+    matched.add('data');
+  }
+
+  for (const pack of customDomains ?? []) {
+    if (pack.fileExtensions.some((ext) => ext && (p.endsWith(ext.toLowerCase()) || p.includes(ext.toLowerCase())))) {
+      matched.add(pack.slug);
+    }
+  }
 
   return Array.from(matched);
+}
+
+function tokenizeTaskQuery(taskQuery?: string | null): string[] {
+  if (!taskQuery) return [];
+  return Array.from(
+    new Set(
+      taskQuery
+        .toLowerCase()
+        .replace(/[^a-z0-9-\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length >= 3),
+    ),
+  );
 }
 
 function formatRuleLine(l: TasteLearning, compact: boolean): string {
@@ -71,6 +106,8 @@ export function selectBudgetedLearnings(params: {
   learnings: TasteLearning[];
   microSkills?: MicroSkill[];
   filePath?: string | null;
+  taskQuery?: string | null;
+  customDomains?: DomainPack[];
   maxTokens?: number;
   compact?: boolean;
   includeHints?: boolean;
@@ -82,7 +119,9 @@ export function selectBudgetedLearnings(params: {
   const compact = params.compact ?? true;
   const includeHints = params.includeHints ?? true;
   const includeMicroSkills = params.includeMicroSkills ?? true;
-  const matchedCategories = inferCategoriesFromFilePath(params.filePath);
+  const matchedCategories = inferCategoriesFromFilePath(params.filePath, params.customDomains);
+  const queryTerms = tokenizeTaskQuery(params.taskQuery);
+  const normalizedFilterCategories = (params.categories ?? []).map((c) => c.toLowerCase().trim());
 
   const activeAll = params.learnings.filter((l) => l.status !== 'archived');
   const verboseBaseline = [
@@ -97,7 +136,12 @@ export function selectBudgetedLearnings(params: {
   const filtered = activeAll.filter((l) => {
     if (params.scope && params.scope !== 'all' && l.scope !== params.scope) return false;
     if (!includeHints && l.status === 'hint') return false;
-    if (params.categories && params.categories.length > 0 && !params.categories.includes(l.category)) return false;
+    if (
+      normalizedFilterCategories.length > 0 &&
+      !normalizedFilterCategories.includes(l.category.toLowerCase())
+    ) {
+      return false;
+    }
     return true;
   });
 
@@ -106,7 +150,16 @@ export function selectBudgetedLearnings(params: {
       const statusWeight = l.status === 'enforced' ? 1.0 : l.status === 'conflicted' ? 0.85 : 0.45;
       const scopeWeight = l.scope === 'project' ? 0.25 : l.scope === 'global' ? 0.15 : 0.1;
       const fileBoost = matchedCategories.includes(l.category) ? 0.55 : 0;
-      const score = statusWeight + scopeWeight + fileBoost + l.confidence * 0.5;
+      let taskBoost = 0;
+      if (queryTerms.length > 0) {
+        const hay = `${l.category} ${l.ruleText} ${l.rationale} ${(l.tags ?? []).join(' ')}`.toLowerCase();
+        let hits = 0;
+        for (const term of queryTerms) {
+          if (hay.includes(term)) hits++;
+        }
+        taskBoost = Math.min(0.9, hits * 0.25);
+      }
+      const score = statusWeight + scopeWeight + fileBoost + taskBoost + l.confidence * 0.5;
       return { learning: l, score };
     })
     .sort((a, b) => b.score - a.score);
@@ -114,10 +167,26 @@ export function selectBudgetedLearnings(params: {
   const headerReserve = 42;
   const totalBudget = Math.max(40, maxTokens - headerReserve);
 
+  const pathTerms = tokenizeTaskQuery(params.filePath);
   const verifiedSkills = includeMicroSkills
     ? (params.microSkills ?? [])
         .filter((m) => m.status === 'verified' && (!params.scope || params.scope === 'all' || m.scope === params.scope))
-        .sort((a, b) => b.corroborations - a.corroborations)
+        .map((m) => {
+          const hay = `${m.category} ${m.triggerPattern} ${m.factText}`.toLowerCase();
+          let relevance = Math.min(1.0, m.corroborations * 0.2);
+          for (const t of queryTerms) {
+            if (hay.includes(t)) relevance += 0.65;
+          }
+          for (const pt of pathTerms) {
+            if (hay.includes(pt)) relevance += 0.5;
+          }
+          if (matchedCategories.some((c) => hay.includes(c) || c.startsWith(m.category.toLowerCase()))) {
+            relevance += 0.4;
+          }
+          return { ms: m, relevance };
+        })
+        .sort((a, b) => b.relevance - a.relevance || b.ms.corroborations - a.ms.corroborations)
+        .map((x) => x.ms)
     : [];
 
   // Reserve up to 25% (capped at 120 tokens) for verified turn-1 repo micro-skills when present
@@ -265,4 +334,15 @@ export function recommendUnusedTools(
       estimatedSchemaTokensSaved: MCP_SCHEMA_TOKENS_PER_TOOL,
       recommendation: `Prune ${entry.toolName} from agent tool allowlist to reclaim ~${MCP_SCHEMA_TOKENS_PER_TOOL} system prompt tokens/turn.`,
     }));
+}
+
+export function buildPrunedAllowlistConfig(
+  unusedTools: UnusedToolRecommendation[],
+  serverAlias = 'tastecaliber',
+): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const rec of unusedTools) {
+    out[`${serverAlias}_${rec.toolName}`] = false;
+  }
+  return out;
 }

@@ -22,15 +22,17 @@ To interoperate reliably with any coding agent, TasteCaliber adheres to all core
 ## 2. Exposed MCP Tools
 
 ### `taste_get_context`
-Call before generating or reviewing code to load token-budgeted, file-relevant developer preferences and verified repository micro-skills.
+Call before generating or reviewing code/text to load token-budgeted, file- and task-relevant developer preferences and verified repository/workflow micro-skills. Annotated with `readOnlyHint: true`.
 - **Arguments**:
   - `scope`: `'all' | 'project' | 'global' | 'remote'` (default `'all'`)
-  - `categories`: optional array of canonical `taste-1` categories
-  - `filePath`: optional active file path (boosts relevant categories such as `database` or `react`)
+  - `categories`: optional array of canonical or custom domain slugs (`typescript`, `python`, `devops`, `writing`, etc.)
+  - `filePath`: optional active file path (boosts matching categories and micro-skills)
+  - `taskQuery`: optional short task description for semantic/intent matching (especially helpful for non-file tasks)
   - `maxTokens`: `number` in `[120, 4000]` (default `800`)
   - `compact`: `boolean` (default `true`)
   - `includeHints`: `boolean` (default `true`)
   - `includeMicroSkills`: `boolean` (default `true`)
+  - `responseFormat`: `'compact' | 'json' | 'both'` (default `'compact'` — omits redundant JSON dump so actual response tokens match `maxTokens`)
   - `agentName`: `string` (default `'MCP Coding Agent'`)
 
 ### `taste_record_signal`
@@ -86,16 +88,28 @@ Edits rule text/rationale/category, archives an obsolete preference, or restores
 ### `taste_manage_micro_skill`
 Explicitly corroborates or retires a repository micro-skill by `microSkillId`.
 
+### `taste_verify_patch`
+Runs deterministic pre-flight compliance checks (`readOnlyHint: true`) on a proposed code snippet, diff, or text draft against active enforced/hint rules and returns matching verified micro-skills before writing files.
+
+### `taste_register_domain`
+Registers or extends a custom category/domain pack (`slug`, `label`, `description`, `keywords`, `fileExtensions`) in SQLite so `taste-1` classifies and boosts any language, stack, or daily workflow.
+
 ---
 
-## 3. MCP Resources & Prompts
+## 3. MCP Resources, Prompts & Optional Auth
 
 | Type | URI / Name | Description |
 | --- | --- | --- |
 | Resource | `taste://profile/project` | Compiled project `taste.md` markdown |
 | Resource | `taste://profile/global` | Compiled personal global `taste.md` markdown |
 | Resource | `taste://objective/metrics` | Recent Meta-RL episodes and KL penalties (JSON) |
-| Prompt | `apply_coding_taste` | Injects all enforced rules for a specified `task` |
+| Resource | `taste://domains` | Index of canonical facets, registered domain packs, and active counts |
+| ResourceTemplate | `taste://category/{category}` | Compiled markdown slice for a single category/domain |
+| ResourceTemplate | `taste://micro-skills/{category}` | Operational micro-skills filtered by category or `all` |
+| Prompt | `apply_coding_taste` | Injects all enforced rules for a specified coding `task` |
+| Prompt | `apply_taste_for_domain` | Injects budgeted rules + micro-skills for any coding or daily-task domain |
+
+> **Optional Remote Auth**: Set `TASTE_API_TOKEN` in `.env` (or Cloudflare Worker secrets) to require `Authorization: Bearer <token>` on `/mcp`. Leave empty for open localhost usage.
 
 ---
 

@@ -6,17 +6,17 @@
 
 ## Key Capabilities
 
-- **Universal MCP Server**: Exposes **Streamable HTTP** (`POST /mcp`) and **Local Stdio** (`npx tsx mcp-stdio.ts`) transports backed by a single SQLite store.
+- **Universal MCP Server (`v1.1.0`)**: Exposes **Streamable HTTP** (`POST /mcp`, optional `TASTE_API_TOKEN` Bearer protection) and **Local Stdio** (`npx tsx mcp-stdio.ts`) transports backed by a single SQLite store, plus edge parity on Cloudflare Workers D1 (`worker.ts`), with MCP `ToolAnnotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`) and recovery-friendly `isError: true` hints.
 - **4-Step Neuro-Symbolic Pipeline**:
   1. **Input Extraction (Configurable LLM + Fallback Chain)**: Converts raw prompts, accepts, rejects, and `before`/`after` diffs into structured candidate signals using Local Inference Engines (Ollama, LM Studio, vLLM), **NVIDIA NIM Fast Models** (`meta/llama-3.1-8b-instruct`, `nvidia/llama-3.1-nemotron-nano-8b-v1`, `qwen/qwen2.5-coder-32b-instruct`, `mistralai/codestral-22b-instruct-v0.1`), OpenRouter, or automatic built-in deterministic fallback.
-  2. **`taste-1` Decision Classifier (Non-Generative)**: Evaluates salience, classifies into an 11-category symbolic taxonomy, prevents duplicate paraphrased rules via semantic similarity checks, flags contradictions instead of silently overwriting rules, and updates confidence via a KL-regularized **Meta-RL Objective**.
-  3. **Markdown Compiler & Linter**: Generates readable, lint-validated `.tastecaliber/taste/**/taste.md` files (with optional LLM synthesis gated by strict structural validation).
+  2. **`taste-1` Decision Classifier (Non-Generative & Extensible)**: Evaluates salience, classifies across **11 core engineering categories + 5 daily-agent domain packs** (`python`, `devops`, `writing`, `workflow`, `data`) and **custom domains** (`taste_register_domain`) + extracted `tags`, prevents duplicate paraphrased rules via semantic similarity checks, flags contradictions across code & behavioral axes (`verbosity`, `autonomy`, `output-format`), and updates confidence via a KL-regularized **Meta-RL Objective**.
+  3. **Markdown Compiler, Linter & Pre-Flight Patch Verifier**: Generates lint-validated `.tastecaliber/taste/**/taste.md` files (with optional LLM synthesis gated by strict structural validation) and runs deterministic `taste_verify_patch` checks on proposed code/diffs before edits land.
   4. **Local SQLite Storage (`data/taste.db`)**: Powered by Node 22's built-in `node:sqlite` in WAL mode with `busy_timeout=5000` and indexed queries for multi-agent concurrency.
 - **Zero-Cost & Agent-Managed Models**: Connects to local engines or free-tier APIs (NVIDIA NIM, OpenRouter), switchable at any time directly from any coding agent via `taste_list_providers` and `taste_set_provider`.
 - **TokenEconomizer Cost Control (`src/engine/economics.ts`)**:
-  - **File-Aware Token-Budgeted Injection**: `taste_get_context` scores rules against `filePath`, trims to `maxTokens` (default `800`), reserves space for verified repo micro-skills, and logs baseline vs. injected token savings.
-  - **Corroborated Repository Micro-Skills**: Captures compact repo operational facts (`candidate -> verified` at `>= 2` corroborations) to skip cold-start exploration turns.
-  - **Failure-Loop Guard & Tool Pruning**: Detects `3+` consecutive corrective/reject signals on the same file or rule (`loopGuard`), resets on `'accept'`, and tracks per-tool usage to flag unused MCP schemas.
+  - **File- & Task-Aware Token-True Context**: `taste_get_context` scores rules and verified micro-skills against `filePath` + `taskQuery`, defaults to `'compact'` formatting without double-JSON bloat, trims to `maxTokens` (default `800`), and logs accurate baseline vs. injected token savings.
+  - **Corroborated Repository Micro-Skills**: Captures compact operational facts (`candidate -> verified` at `>= 2` corroborations) across code and daily workflows to skip cold-start exploration turns.
+  - **Failure-Loop Guard & Tool Pruning**: Detects `3+` consecutive corrective/reject signals (`loopGuard`), resets on `'accept'`, tracks per-tool usage across all **18 MCP tools**, and emits a copy-ready `prunedAllowlistSnippet`.
 
 ---
 
@@ -37,6 +37,7 @@ Edit `.env` to point at your local inference engine or free-tier API secrets:
 
 ```env
 TASTE_DB_PATH="./data/taste.db"
+TASTE_API_TOKEN=""
 LOCAL_LLM_BASE_URL="http://localhost:11434/v1"
 LOCAL_LLM_MODEL="qwen2.5-coder:7b"
 NVIDIA_API_KEY=""
@@ -118,7 +119,7 @@ Read the step-by-step setup in [docs/deployment.md](docs/deployment.md).
 
 ## Documentation Index
 
-- **[Architecture & `taste-1` Engine](docs/architecture.md)** — 4-step pipeline, Meta-RL objective math, contradiction detection, SQLite schema (including `micro_skills`, `economics_events`, `tool_usage`), and `.tastecaliber/taste/` sync.
-- **[MCP Protocol & Client Setup](docs/mcp-protocol.md)** — Required MCP server specifications, all 16 tools, 3 resources, prompt templates, and agent integration configs.
+- **[Architecture & `taste-1` Engine](docs/architecture.md)** — 4-step pipeline, Meta-RL objective math, extensible domains & behavioral conflict axes, SQLite schema (including `domain_packs`, `micro_skills`, `economics_events`, `tool_usage`), and `.tastecaliber/taste/` sync.
+- **[MCP Protocol & Client Setup](docs/mcp-protocol.md)** — Required MCP server specifications, all **18 tools** (with `annotations`), **6 resources/templates**, **2 prompt templates**, optional Bearer auth, and agent integration configs.
 - **[LLM Providers & Local Engines](docs/providers.md)** — Configuring Ollama, LM Studio, vLLM, NVIDIA NIM, and OpenRouter free models.
-- **[Deployment Guide](docs/deployment.md)** — Deploying TasteCaliber via `worker.ts` + `wrangler.toml` (Cloudflare Workers), Vercel Functions, `Dockerfile`, and local stdio.
+- **[Deployment Guide](docs/deployment.md)** — Deploying TasteCaliber via `worker.ts` + `wrangler.toml` (Cloudflare Workers D1), Vercel Functions, `Dockerfile`, and local stdio.

@@ -250,6 +250,7 @@ export default function App() {
                   learnings={data.learnings}
                   packages={data.packages}
                   lintResults={data.lintResults}
+                  domainPacks={data.domainPacks}
                   onFeedback={handleFeedback}
                   onResolveConflict={handleResolveConflict}
                   onSyncPackages={handleSyncPackages}

@@ -1,4 +1,5 @@
 import {
+  DomainPack,
   EconomicsSummary,
   LintFileResult,
   MicroSkill,
@@ -38,6 +39,7 @@ export interface OverviewData {
   lintResults: LintFileResult[];
   microSkills: MicroSkill[];
   economics: EconomicsSummary;
+  domainPacks?: DomainPack[];
   agents: AgentConnection[];
 }
 

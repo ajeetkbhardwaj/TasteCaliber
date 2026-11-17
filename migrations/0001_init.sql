@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS learnings (
   kl_divergence REAL NOT NULL DEFAULT 0,
   evidence_count INTEGER NOT NULL DEFAULT 1,
   conflicts_with_id TEXT,
+  tags TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -92,7 +93,7 @@ CREATE TABLE IF NOT EXISTS agent_connections (
 CREATE TABLE IF NOT EXISTS micro_skills (
   id TEXT PRIMARY KEY,
   scope TEXT NOT NULL CHECK (scope IN ('project', 'global', 'remote')),
-  category TEXT NOT NULL CHECK (category IN ('test', 'build', 'lint', 'env', 'db', 'deploy', 'pattern')),
+  category TEXT NOT NULL,
   trigger_pattern TEXT NOT NULL,
   fact_text TEXT NOT NULL,
   corroborations INTEGER NOT NULL DEFAULT 1,
@@ -120,6 +121,18 @@ CREATE TABLE IF NOT EXISTS tool_usage (
   call_count INTEGER NOT NULL DEFAULT 0,
   avg_response_tokens INTEGER NOT NULL DEFAULT 0,
   last_called_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS domain_packs (
+  id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL,
+  description TEXT NOT NULL,
+  keywords_json TEXT NOT NULL DEFAULT '[]',
+  file_extensions_json TEXT NOT NULL DEFAULT '[]',
+  is_builtin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_learnings_scope_cat_status ON learnings(scope, category, status);

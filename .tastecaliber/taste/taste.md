@@ -6,8 +6,6 @@
 
 ## typescript
 
-- [confidence: 0.94] [enforced] Prefer named exports and strict TypeScript return types on exported helpers
-  - Rationale: Prefer named exports and strict TypeScript return types on exported helpers (1 line(s) replaced by 1 line(s))
 - [confidence: 0.91] [enforced] Avoid explicit any in TypeScript; use unknown with narrow type guards or zod schemas
   - Rationale: Preserves end-to-end static safety across MCP tool boundaries.
 
@@ -37,3 +35,8 @@
 
 - [confidence: 0.78] [enforced] Prefer named exports over default exports in engine and service modules
   - Rationale: Enables reliable IDE refactoring and deterministic tree-shaking.
+
+## rust
+
+- [confidence: 0.69] [hint] Always avoid unwrap() in production Rust handlers and propagate errors with ?
+  - Rationale: Observed prompt signal in src/main.rs.

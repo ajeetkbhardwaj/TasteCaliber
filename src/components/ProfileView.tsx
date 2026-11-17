@@ -11,6 +11,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import {
+  DomainPack,
   LintFileResult,
   TASTE_CATEGORIES,
   TasteCategory,
@@ -23,6 +24,7 @@ interface ProfileViewProps {
   learnings: TasteLearning[];
   packages: TastePackage[];
   lintResults: LintFileResult[];
+  domainPacks?: DomainPack[];
   onFeedback: (learningId: string, feedback: 'accept' | 'reject') => Promise<void>;
   onResolveConflict: (
     learningId: string,
@@ -36,6 +38,7 @@ export function ProfileView({
   learnings,
   packages,
   lintResults,
+  domainPacks,
   onFeedback,
   onResolveConflict,
   onSyncPackages,
@@ -62,6 +65,14 @@ export function ProfileView({
   const [bootstrapping, setBootstrapping] = useState(false);
   const [bootstrapNotice, setBootstrapNotice] = useState<string | null>(null);
 
+  const availableCategories = Array.from(
+    new Set<string>([
+      ...TASTE_CATEGORIES,
+      ...(domainPacks ?? []).map((d) => d.slug),
+      ...learnings.map((l) => l.category),
+    ]),
+  ).sort();
+
   const filtered = learnings.filter((l) => {
     if (statusFilter === 'all' && l.status === 'archived') return false;
     if (scopeFilter !== 'all' && l.scope !== scopeFilter) return false;
@@ -72,7 +83,8 @@ export function ProfileView({
       return (
         l.ruleText.toLowerCase().includes(q) ||
         l.rationale.toLowerCase().includes(q) ||
-        l.category.toLowerCase().includes(q)
+        l.category.toLowerCase().includes(q) ||
+        (l.tags ?? []).some((t) => t.toLowerCase().includes(q))
       );
     }
     return true;
@@ -270,7 +282,7 @@ export function ProfileView({
               className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
             >
               <option value="all">All Categories</option>
-              {TASTE_CATEGORIES.map((cat) => (
+              {availableCategories.map((cat) => (
                 <option key={cat} value={cat}>
                   {cat}
                 </option>
@@ -393,19 +405,20 @@ export function ProfileView({
                           </div>
                           <div>
                             <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                              Category
+                              Category / Domain
                             </label>
-                            <select
+                            <input
+                              type="text"
+                              list="taste-edit-categories"
                               value={editCategory}
-                              onChange={(e) => setEditCategory(e.target.value as TasteCategory)}
+                              onChange={(e) => setEditCategory(e.target.value)}
                               className="w-full px-2.5 py-1.5 text-xs border border-slate-300 rounded-md bg-white"
-                            >
-                              {TASTE_CATEGORIES.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
+                            />
+                            <datalist id="taste-edit-categories">
+                              {availableCategories.map((c) => (
+                                <option key={c} value={c} />
                               ))}
-                            </select>
+                            </datalist>
                           </div>
                         </div>
                         <div>

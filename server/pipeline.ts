@@ -1,5 +1,4 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { TASTE_CATEGORIES } from '../src/engine/types.ts';
 import type {
   PipelineStepTrace,
   RlEpisode,
@@ -10,14 +9,17 @@ import type {
 } from '../src/engine/types.ts';
 import {
   classifyWithTaste1,
+  extractTagsFromRule,
   findSimilarLearning,
   lintTasteMarkdown,
+  normalizeCategorySlug,
   normalizeRuleKey,
   updateMetaRL,
 } from '../src/engine/taste1.ts';
 import {
   getLearningById,
   getSettings,
+  listDomainPacks,
   listLearnings,
   listPackages,
   listSignals,
@@ -47,6 +49,8 @@ export async function processTasteSignal(
     signalType: SignalType;
     scope?: TasteScope;
     filePath?: string | null;
+    category?: string | null;
+    tags?: string[];
     rawInput: string;
     diffBefore?: string | null;
     diffAfter?: string | null;
@@ -70,6 +74,7 @@ export async function processTasteSignal(
 
   // Step 2: taste-1 Meta Neuro-Symbolic Classifier
   const existingLearnings = listLearnings(db);
+  const customDomains = listDomainPacks(db);
   const step2 = classifyWithTaste1({
     extracted: step1,
     signalType: input.signalType,
@@ -77,6 +82,8 @@ export async function processTasteSignal(
     diffBefore: input.diffBefore,
     diffAfter: input.diffAfter,
     existingLearnings,
+    customDomains,
+    preferredCategory: input.category,
   });
 
   const recentSignals = listSignals(db, 12);
@@ -247,12 +254,19 @@ export async function processTasteSignal(
     const finalStatus = step2.isPreference ? step2.recommendedStatus : 'archived';
     const finalConf = step2.isPreference ? step2.initialConfidence : rl.confidenceAfter;
 
+    const derivedTags = Array.from(
+      new Set([
+        ...(input.tags ?? []).map((t) => normalizeCategorySlug(t)),
+        ...extractTagsFromRule(step1.candidateRule, input.filePath, step2.category),
+      ]),
+    );
+
     db.prepare(
       `INSERT INTO learnings (
         id, package_id, scope, category, rule_key, rule_text, rationale, confidence, status,
         reward_sum, accept_count, reject_count, kl_divergence, evidence_count, conflicts_with_id,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        tags, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       newId,
       targetPkg.id,
@@ -269,6 +283,7 @@ export async function processTasteSignal(
       rl.klPenalty,
       1,
       step2.contradictsId,
+      JSON.stringify(derivedTags),
       now,
       now,
     );
@@ -442,7 +457,7 @@ export function applyLearningFeedback(
 export function editLearning(
   db: DatabaseSync,
   learningId: string,
-  updates: { ruleText?: string; rationale?: string; category?: TasteCategory },
+  updates: { ruleText?: string; rationale?: string; category?: TasteCategory; tags?: string[] },
 ): { learning: TasteLearning; syncedFiles: string[] } {
   const existing = getLearningById(db, learningId);
   if (!existing) {
@@ -451,16 +466,19 @@ export function editLearning(
 
   const nextRule = updates.ruleText?.trim() || existing.ruleText;
   const nextRationale = updates.rationale !== undefined ? updates.rationale.trim() : existing.rationale;
-  const nextCategory =
-    updates.category && TASTE_CATEGORIES.includes(updates.category)
-      ? updates.category
-      : existing.category;
+  const nextCategory = updates.category?.trim()
+    ? normalizeCategorySlug(updates.category)
+    : existing.category;
+  const nextTags =
+    updates.tags !== undefined
+      ? updates.tags.map((t) => normalizeCategorySlug(t)).filter(Boolean)
+      : existing.tags ?? extractTagsFromRule(nextRule, null, nextCategory);
   const nextKey = normalizeRuleKey(nextRule);
   const now = new Date().toISOString();
 
   db.prepare(
-    `UPDATE learnings SET rule_text = ?, rationale = ?, category = ?, rule_key = ?, updated_at = ? WHERE id = ?`,
-  ).run(nextRule, nextRationale, nextCategory, nextKey, now, learningId);
+    `UPDATE learnings SET rule_text = ?, rationale = ?, category = ?, rule_key = ?, tags = ?, updated_at = ? WHERE id = ?`,
+  ).run(nextRule, nextRationale, nextCategory, nextKey, JSON.stringify(nextTags), now, learningId);
 
   const syncedFiles = syncAllPackageMarkdown(db);
   return {
@@ -636,8 +654,8 @@ export function pushOrPullPackages(
         `INSERT INTO learnings (
           id, package_id, scope, category, rule_key, rule_text, rationale, confidence, status,
           reward_sum, accept_count, reject_count, kl_divergence, evidence_count, conflicts_with_id,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          tags, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         newId,
         targetPkg.id,
@@ -654,6 +672,7 @@ export function pushOrPullPackages(
         src.klDivergence,
         src.evidenceCount,
         null,
+        JSON.stringify(src.tags ?? []),
         now,
         now,
       );

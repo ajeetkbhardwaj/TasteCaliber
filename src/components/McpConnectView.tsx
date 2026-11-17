@@ -10,10 +10,12 @@ const MCP_TOOLS = [
     sampleArgs: {
       scope: 'all',
       filePath: 'server/db.ts',
+      taskQuery: 'SQLite prepared query optimization',
       maxTokens: 800,
       compact: true,
       includeHints: true,
       includeMicroSkills: true,
+      responseFormat: 'compact',
       agentName: 'Workbench Inspector',
     },
   },
@@ -111,6 +113,27 @@ const MCP_TOOLS = [
     name: 'taste_manage_micro_skill',
     description: 'Corroborate or retire a repository micro-skill by ID',
     sampleArgs: { microSkillId: 'ms-vite-hmr', action: 'corroborate' },
+  },
+  {
+    name: 'taste_verify_patch',
+    description: 'Pre-flight check code/diff against active enforced rules & micro-skills',
+    sampleArgs: {
+      code: 'export default function load(id: any) { return db.exec(`SELECT * FROM users WHERE id = ${id}`); }',
+      filePath: 'server/db.ts',
+      taskQuery: 'review database helper',
+      agentName: 'Workbench Inspector',
+    },
+  },
+  {
+    name: 'taste_register_domain',
+    description: 'Register or extend a custom category/domain pack for any workflow',
+    sampleArgs: {
+      slug: 'rust',
+      label: 'Rust Systems',
+      description: 'Rust ownership, clippy, cargo, and async tokio guidelines',
+      keywords: ['cargo', 'clippy', 'tokio', 'unwrap', 'borrow'],
+      fileExtensions: ['.rs', '.toml'],
+    },
   },
 ];
 
@@ -456,22 +479,19 @@ export function McpConnectView({ onSignalProcessed }: { onSignalProcessed: () =>
         </div>
 
         <div className="pt-2 border-t border-slate-200 space-y-2">
-          <h3 className="text-xs font-semibold text-slate-800">Exposed MCP Capabilities (16 Tools + 3 Resources)</h3>
+          <h3 className="text-xs font-semibold text-slate-800">Exposed MCP Capabilities (18 Annotated Tools · 6 Resources · 2 Prompts)</h3>
           <ul className="space-y-1.5 text-xs text-slate-600">
             <li>
-              <span className="font-mono text-slate-900">taste_get_context</span> · Injects enforced rules &amp; hints before code generation
+              <span className="font-mono text-slate-900">taste_get_context</span> &amp; <span className="font-mono text-slate-900">taste_verify_patch</span> · Token-true budgeted injection &amp; pre-flight code compliance checks
             </li>
             <li>
-              <span className="font-mono text-slate-900">taste_record_signal</span> · Runs 4-step pipeline on edits, diffs, accepts &amp; rejects
+              <span className="font-mono text-slate-900">taste_record_signal</span> &amp; <span className="font-mono text-slate-900">taste_register_domain</span> · 4-step pipeline + failure-loop guard + extensible custom domains
             </li>
             <li>
               <span className="font-mono text-slate-900">taste_list_providers</span> &amp; <span className="font-mono text-slate-900">taste_set_provider</span> · Switch NVIDIA NIM fast models, OpenRouter, or local inference engines from your agent
             </li>
             <li>
-              <span className="font-mono text-slate-900">taste_bootstrap</span> &amp; <span className="font-mono text-slate-900">taste_configure_settings</span> · Batch import guidelines or pause/resume learning
-            </li>
-            <li>
-              <span className="font-mono text-slate-900">taste://profile/project</span> · Live MCP markdown resource
+              <span className="font-mono text-slate-900">taste://domains</span> &amp; <span className="font-mono text-slate-900">taste://category/&#123;category&#125;</span> · Discoverable domain slices &amp; micro-skill resources
             </li>
           </ul>
         </div>

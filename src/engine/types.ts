@@ -12,7 +12,20 @@ export const TASTE_CATEGORIES = [
   'performance',
 ] as const;
 
-export type TasteCategory = (typeof TASTE_CATEGORIES)[number];
+export type CanonicalTasteCategory = (typeof TASTE_CATEGORIES)[number];
+export type TasteCategory = string;
+
+export interface DomainPack {
+  id: string;
+  slug: string;
+  label: string;
+  description: string;
+  keywords: string[];
+  fileExtensions: string[];
+  isBuiltin: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export type TasteScope = 'project' | 'global' | 'remote';
 
@@ -107,6 +120,7 @@ export interface TasteLearning {
   klDivergence: number;
   evidenceCount: number;
   conflictsWithId: string | null;
+  tags?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -224,7 +238,22 @@ export interface LoopGuardResult {
   interventionAdvice: string | null;
 }
 
-export type MicroSkillCategory = 'test' | 'build' | 'lint' | 'env' | 'db' | 'deploy' | 'pattern';
+export const CORE_MICRO_SKILL_CATEGORIES = [
+  'test',
+  'build',
+  'lint',
+  'env',
+  'db',
+  'deploy',
+  'pattern',
+  'workflow',
+  'ops',
+  'docs',
+  'tool',
+  'data',
+] as const;
+
+export type MicroSkillCategory = string;
 export type MicroSkillStatus = 'candidate' | 'verified' | 'retired';
 
 export interface MicroSkill {
@@ -283,6 +312,7 @@ export interface EconomicsSummary {
   candidateMicroSkills: number;
   toolUsage: ToolUsageStat[];
   unusedToolRecommendations: UnusedToolRecommendation[];
+  prunedAllowlistSnippet?: Record<string, boolean>;
   recentEvents: EconomicsEvent[];
 }
 
@@ -298,6 +328,29 @@ export interface ContextBudgetResult {
   compressionRatioPct: number;
   matchedCategories: TasteCategory[];
   markdownText: string;
+}
+
+export interface PatchViolation {
+  severity: 'error' | 'warning';
+  learningId: string;
+  category: TasteCategory;
+  ruleText: string;
+  confidence: number;
+  reason: string;
+}
+
+export interface PatchVerificationResult {
+  compliant: boolean;
+  checkedRulesCount: number;
+  violations: PatchViolation[];
+  warnings: PatchViolation[];
+  relevantMicroSkills: Array<{
+    id: string;
+    category: MicroSkillCategory;
+    triggerPattern: string;
+    factText: string;
+  }>;
+  summary: string;
 }
 
 export interface PipelineStepTrace {

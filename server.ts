@@ -11,6 +11,7 @@ import {
   getEconomicsSummary,
   getSettings,
   lintAllPackages,
+  listDomainPacks,
   listLearnings,
   listMicroSkills,
   listPackages,
@@ -18,6 +19,7 @@ import {
   listRlEpisodes,
   listSignals,
   retireMicroSkill,
+  upsertDomainPack,
   upsertOrCorroborateMicroSkill,
 } from './server/db.ts';
 import { createTasteMcpServer } from './server/mcp.ts';
@@ -36,7 +38,7 @@ import {
   testProviderConnectivity,
   updateProviderSettings,
 } from './server/providers.ts';
-import { META_RL_CONFIG } from './src/engine/taste1.ts';
+import { META_RL_CONFIG, verifyPatchAgainstTaste } from './src/engine/taste1.ts';
 import { NVIDIA_FAST_MODELS, OPENROUTER_FREE_MODELS } from './src/engine/types.ts';
 import type {
   MicroSkillCategory,
@@ -81,21 +83,43 @@ async function startServer(): Promise<void> {
   const httpServer = http.createServer(app);
   app.use(express.json({ limit: '2mb' }));
 
-  // CORS for Streamable HTTP MCP clients across IDEs & browsers
+  // CORS + optional Bearer token auth (when TASTE_API_TOKEN env var is set) for Streamable HTTP MCP clients
   app.use('/mcp', (req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Mcp-Session-Id, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Mcp-Session-Id, Authorization, X-API-Key');
     if (req.method === 'OPTIONS') {
       res.status(204).end();
       return;
     }
+
+    const expectedToken = process.env.TASTE_API_TOKEN?.trim();
+    if (expectedToken) {
+      const authHeader = req.headers.authorization || '';
+      const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      const apiKey = typeof req.headers['x-api-key'] === 'string' ? req.headers['x-api-key'].trim() : '';
+      if (bearer !== expectedToken && apiKey !== expectedToken) {
+        res.status(401).json({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Unauthorized: valid Bearer TASTE_API_TOKEN required for remote /mcp access' },
+          id: null,
+        });
+        return;
+      }
+    }
+
     next();
   });
 
   // Health check
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, brand: 'TasteCaliber', engine: 'taste-1', storage: 'sqlite' });
+    res.json({
+      ok: true,
+      brand: 'TasteCaliber',
+      engine: 'taste-1',
+      storage: 'sqlite',
+      authProtected: Boolean(process.env.TASTE_API_TOKEN?.trim()),
+    });
   });
 
   // Streamable HTTP MCP Endpoint (stateless JSON-RPC 2.0 + SSE compatible)
@@ -127,10 +151,11 @@ async function startServer(): Promise<void> {
   app.get('/mcp', (_req, res) => {
     res.json({
       name: 'tastecaliber-mcp',
-      version: '1.0.0',
+      version: '1.1.0',
       transport: 'streamable-http',
       endpoint: '/mcp',
       stdioCommand: 'npx tsx mcp-stdio.ts',
+      authRequired: Boolean(process.env.TASTE_API_TOKEN?.trim()),
       tools: ALL_MCP_TOOL_NAMES,
     });
   });
@@ -150,6 +175,7 @@ async function startServer(): Promise<void> {
     const lintResults = lintAllPackages(db);
     const microSkills = listMicroSkills(db);
     const economics = getEconomicsSummary(db);
+    const domainPacks = listDomainPacks(db);
     const agents = db.prepare('SELECT * FROM agent_connections ORDER BY last_seen_at DESC').all();
 
     res.json({
@@ -165,8 +191,48 @@ async function startServer(): Promise<void> {
       lintResults,
       microSkills,
       economics,
+      domainPacks,
       agents,
     });
+  });
+
+  // Custom & Starter Domain Packs
+  app.get('/api/domains', (_req, res) => {
+    res.json({ domainPacks: listDomainPacks(db) });
+  });
+
+  app.post('/api/domains', (req, res) => {
+    const { slug, label, description, keywords, fileExtensions } = req.body ?? {};
+    if (!slug || !label || String(slug).trim().length < 2 || String(label).trim().length < 2) {
+      res.status(400).json({ error: 'slug and label (min 2 chars) are required.' });
+      return;
+    }
+    const result = upsertDomainPack(db, {
+      slug: String(slug),
+      label: String(label),
+      description: description ? String(description) : undefined,
+      keywords: Array.isArray(keywords) ? keywords.map(String) : [],
+      fileExtensions: Array.isArray(fileExtensions) ? fileExtensions.map(String) : [],
+    });
+    res.json({ ...result, domainPacks: listDomainPacks(db) });
+  });
+
+  // Deterministic Pre-Flight Patch / Snippet Compliance Verifier
+  app.post('/api/verify-patch', (req, res) => {
+    const { code, filePath, taskQuery, scope } = req.body ?? {};
+    if (!code || typeof code !== 'string') {
+      res.status(400).json({ error: 'code string is required.' });
+      return;
+    }
+    const targetScope = (scope as TasteScope | 'all') || 'all';
+    const report = verifyPatchAgainstTaste({
+      code,
+      filePath: filePath || null,
+      taskQuery: taskQuery || undefined,
+      learnings: listLearnings(db, { scope: targetScope }),
+      microSkills: listMicroSkills(db, { scope: targetScope }),
+    });
+    res.json(report);
   });
 
   // Economics & Micro-Skills (TokenEconomizer Phase 2)
@@ -226,11 +292,12 @@ async function startServer(): Promise<void> {
 
   app.patch('/api/learnings/:id', (req, res) => {
     try {
-      const { ruleText, rationale, category } = req.body ?? {};
+      const { ruleText, rationale, category, tags } = req.body ?? {};
       const result = editLearning(db, req.params.id, {
         ruleText,
         rationale,
         category: category as TasteCategory | undefined,
+        tags: Array.isArray(tags) ? tags.map(String) : undefined,
       });
       res.json(result);
     } catch (err) {
@@ -284,7 +351,7 @@ async function startServer(): Promise<void> {
   // Signal Ingestion & Batch Bootstrap
   app.post('/api/signals', async (req, res) => {
     try {
-      const { rawInput, diffBefore, diffAfter, filePath, signalType, scope, sourceAgent } = req.body ?? {};
+      const { rawInput, diffBefore, diffAfter, filePath, category, tags, signalType, scope, sourceAgent } = req.body ?? {};
       if (!rawInput || typeof rawInput !== 'string' || rawInput.trim().length < 2) {
         res.status(400).json({ error: 'Please provide a descriptive coding preference or edit note (min 2 chars).' });
         return;
@@ -294,6 +361,8 @@ async function startServer(): Promise<void> {
         signalType: (signalType as SignalType) || 'edit',
         scope: (scope as TasteScope) || 'project',
         filePath: filePath || null,
+        category: category || null,
+        tags: Array.isArray(tags) ? tags.map(String) : undefined,
         rawInput: rawInput.trim(),
         diffBefore: diffBefore || null,
         diffAfter: diffAfter || null,
